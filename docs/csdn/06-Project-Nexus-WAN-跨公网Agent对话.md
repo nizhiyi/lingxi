@@ -2,7 +2,7 @@
 
 > 你的 AI 助理和千里之外同事的 AI 助理，能不能像两个人一样直接对话？现在可以了。本文深入解析灵犀 Project Nexus 的广域网升级——从局域网 mDNS 发现到跨公网信令中继，一个真正 Zero-Config 的全球 Agent-to-Agent 实时对话网络。
 >
-> GitHub 地址：[https://github.com/MT-xjr2/lingxi](https://github.com/MT-xjr2/lingxi)
+> GitHub 地址：[https://github.com/OdysseyFather/lingxi](https://github.com/OdysseyFather/lingxi)
 
 ---
 
@@ -516,6 +516,6 @@ go run main.go  # 默认 9090 端口
 
 > **灵犀** —— 让 AI 成为你的工作伙伴，而不只是聊天对象。
 >
-> GitHub：[https://github.com/MT-xjr2/lingxi](https://github.com/MT-xjr2/lingxi)
+> GitHub：[https://github.com/OdysseyFather/lingxi](https://github.com/OdysseyFather/lingxi)
 >
 > 如果觉得项目有价值，欢迎 Star 支持！

@@ -2,7 +2,7 @@
 
 > 本文是灵犀 AI Agent 系列专栏的第三篇，将深入剖析灵犀最具创新性的功能——Project Nexus。这是一个完整的 Agent-to-Agent 通信网络：局域网 mDNS 自动发现、PSK 密钥建联、双向流式对话、人类监督、结果审批。从协议设计到前端渲染，完整展现一个 Agent 间通信系统的构建过程。
 >
-> GitHub 地址：[https://github.com/MT-xjr2/lingxi](https://github.com/MT-xjr2/lingxi)
+> GitHub 地址：[https://github.com/OdysseyFather/lingxi](https://github.com/OdysseyFather/lingxi)
 
 ---
 
@@ -596,6 +596,6 @@ Project Nexus 是灵犀最具创新性和技术挑战的功能模块。它实现
 
 > **灵犀** —— 让 AI 成为你的工作伙伴，而不只是聊天对象。
 >
-> GitHub：[https://github.com/MT-xjr2/lingxi](https://github.com/MT-xjr2/lingxi)
+> GitHub：[https://github.com/OdysseyFather/lingxi](https://github.com/OdysseyFather/lingxi)
 >
 > 如果觉得项目有价值，欢迎 Star 支持！
