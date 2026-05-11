@@ -1,17 +1,22 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
-	"log"
+	"log/slog"
 	"net/http"
 	"os"
+	"os/signal"
 	"path/filepath"
 	"strings"
+	"syscall"
+	"time"
 
 	"lingxi-agent/config"
 	"lingxi-agent/connector"
 	"lingxi-agent/db"
 	"lingxi-agent/handler"
+	"lingxi-agent/logger"
 	"lingxi-agent/nexus"
 	"lingxi-agent/scheduler"
 
@@ -19,13 +24,19 @@ import (
 )
 
 func main() {
+	logger.Init()
 	cfg := config.Get()
 	db.Init()
-	db.SeedDingTalkOAuth("ding984jgwjcylgoyb2y", "-1O1oF49HSvkPvcFWq2cIVmGLX3hvEj35QWdSI1P_16Vc9CKjhLgqq4vuwF7oQye")
+	if cfg.DingTalk.ClientID != "" && cfg.DingTalk.ClientSecret != "" {
+		db.SeedDingTalkOAuth(cfg.DingTalk.ClientID, cfg.DingTalk.ClientSecret)
+	}
 	go handler.BootstrapInstalledSkills()
 
 	gin.SetMode(gin.ReleaseMode)
 	r := gin.Default()
+	r.MaxMultipartMemory = 32 << 20 // 32 MB
+	r.Use(handler.LocalOriginCORS())
+	r.Use(handler.BodySizeLimit(64 << 20)) // 64 MB
 
 	dist := cfg.Server.FrontendDist
 	r.Static("/assets", dist+"/assets")
@@ -52,6 +63,10 @@ func main() {
 
 	// 健康检查
 	api.GET("/ping", func(c *gin.Context) { c.JSON(http.StatusOK, gin.H{"ok": true}) })
+	api.GET("/health", handler.HealthCheck)
+
+	// 数据库备份
+	api.GET("/backup/export", handler.ExportBackup)
 
 	// ── 认证（SSO + 游客）────────────────────────────────────────
 	api.GET("/auth/status", handler.HasUser)
@@ -68,6 +83,7 @@ func main() {
 	api.PATCH("/sessions/:id", handler.UpdateSession)
 	api.DELETE("/sessions/:id", handler.DeleteSession)
 	api.POST("/sessions/batch-delete", handler.BatchDeleteSessions)
+	api.POST("/sessions/:id/extract-knowledge", handler.ExtractSessionKnowledge)
 	api.GET("/sessions/:id/messages", handler.ListMessages)
 	api.GET("/messages/search", handler.SearchMessages)
 	api.PUT("/messages/:id", handler.UpdateMessage)
@@ -98,6 +114,7 @@ func main() {
 	api.GET("/skills/:id/content", handler.GetSkillContent)
 	api.PUT("/skills/:id/content", handler.UpdateSkillContent)
 	api.GET("/skills/:id/export", handler.ExportSkill)
+	api.POST("/skills/batch-export", handler.BatchExportSkills)
 	api.POST("/skills/:id/install", handler.InstallSkill)
 	api.POST("/skills/:id/uninstall", handler.UninstallSkill)
 	api.DELETE("/skills/:id", handler.DeleteSkill)
@@ -168,7 +185,8 @@ func main() {
 	api.POST("/transcribe", handler.TranscribeAudio)
 
 	// ── Project Nexus: Agent-to-Agent Communication ──────────────
-	nexusAPI := api.Group("/nexus")
+	nexusLimiter := handler.NewRateLimiter(60, 20) // 60 req/min, burst 20
+	nexusAPI := api.Group("/nexus", handler.NexusRateLimit(nexusLimiter))
 	nexusAPI.GET("/info", handler.NexusInfo)
 	nexusAPI.POST("/conversation/invite", handler.NexusReceiveConvInvite)
 	nexusAPI.POST("/conversation/accept", handler.NexusReceiveConvAccept)
@@ -197,6 +215,17 @@ func main() {
 	api.DELETE("/a2a-conversations/:id", handler.DeleteA2AConversation)
 	api.GET("/agents/:id/nexus-config", handler.GetAgentNexusConfig)
 	api.PUT("/agents/:id/nexus-config", handler.UpsertAgentNexusConfig)
+
+	// ── 自我进化 ────────────────────────────────────────────────────
+	api.GET("/agents/:id/evolution", handler.GetEvolutionConfig)
+	api.PUT("/agents/:id/evolution", handler.SetEvolutionConfig)
+	api.GET("/agents/:id/evolution/logs", handler.ListEvolutionLogs)
+	api.DELETE("/agents/:id/evolution/logs", handler.ClearEvolutionLogs)
+	api.POST("/agents/:id/evolution/extract", handler.ManualExtract)
+	api.GET("/evolution/logs", handler.ListAllEvolutionLogs)
+	api.GET("/evolution/stats", handler.GetEvolutionStats)
+	api.DELETE("/evolution/logs/:id", handler.DeleteEvolutionLog)
+	api.POST("/evolution/logs/:id/revert", handler.RevertEvolutionLog)
 
 	// Electron 启动时下发激活档案明文 token
 	api.POST("/runtime/active-secret", handler.SetActiveSecret)
@@ -238,10 +267,39 @@ func main() {
 	})
 	scheduler.Start()
 
-	log.Printf("[main] desktop mode, listening on :%s", cfg.Server.Port)
-	if err := r.Run(":" + cfg.Server.Port); err != nil {
-		log.Fatalf("[main] run error: %v", err)
+	backupStop := make(chan struct{})
+	go handler.StartDailyBackup(backupStop)
+
+	srv := &http.Server{
+		Addr:    ":" + cfg.Server.Port,
+		Handler: r,
 	}
+
+	go func() {
+		slog.Info("desktop mode, listening", "port", cfg.Server.Port)
+		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+			slog.Error("listen error", "err", err)
+			os.Exit(1)
+		}
+	}()
+
+	quit := make(chan os.Signal, 1)
+	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
+	<-quit
+	slog.Info("shutting down...")
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	close(backupStop)
+	scheduler.Stop()
+	nexus.Global.Stop()
+
+	if err := srv.Shutdown(ctx); err != nil {
+		slog.Error("server shutdown error", "err", err)
+	}
+	db.DB.Close()
+	slog.Info("shutdown complete")
 }
 
 // buildRelayHandler 构建通过信令服务器中继的消息处理函数
@@ -249,7 +307,7 @@ func main() {
 func buildRelayHandler(r *gin.Engine) nexus.RelayHandler {
 	return func(fromPeerID string, path string, payload json.RawMessage) interface{} {
 		fullPath := "/api/nexus" + path
-		log.Printf("[relay] received from %s: path=%s payloadLen=%d", fromPeerID, fullPath, len(payload))
+		slog.Debug("relay received", "from", fromPeerID, "path", fullPath, "payloadLen", len(payload))
 
 		body := payload
 		if body == nil {
@@ -260,22 +318,21 @@ func buildRelayHandler(r *gin.Engine) nexus.RelayHandler {
 		if len(summary) > 500 {
 			summary = summary[:500] + "..."
 		}
-		log.Printf("[relay] payload: %s", summary)
+		slog.Debug("relay payload", "body", summary)
 
 		w := &relayResponseWriter{headers: http.Header{}, body: []byte{}, status: 200}
 		req, err := http.NewRequest("POST", fullPath, strings.NewReader(string(body)))
 		if err != nil {
-			log.Printf("[relay] create request error: %v", err)
+			slog.Error("relay create request error", "err", err)
 			return map[string]interface{}{"error": err.Error()}
 		}
 		req.Header.Set("Content-Type", "application/json")
 
 		r.ServeHTTP(w, req)
-		log.Printf("[relay] handled %s -> status=%d bodyLen=%d body=%s",
-			fullPath, w.status, len(w.body), truncateStr(string(w.body), 200))
+		slog.Debug("relay handled", "path", fullPath, "status", w.status, "bodyLen", len(w.body))
 
 		if w.status >= 400 {
-			log.Printf("[relay] ERROR from=%s path=%s status=%d body=%s", fromPeerID, fullPath, w.status, string(w.body))
+			slog.Warn("relay error", "from", fromPeerID, "path", fullPath, "status", w.status, "body", string(w.body))
 			return map[string]interface{}{"error": string(w.body), "status": w.status}
 		}
 

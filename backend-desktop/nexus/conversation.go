@@ -3,7 +3,7 @@ package nexus
 import (
 	"encoding/json"
 	"fmt"
-	"log"
+	"log/slog"
 	"strings"
 	"sync"
 	"time"
@@ -96,7 +96,7 @@ func RunConversation(convID int64, sessionID int64) {
 
 	conv, err := db.GetA2AConversation(convID)
 	if err != nil {
-		log.Printf("[nexus] conversation %d not found: %v", convID, err)
+		slog.Info("conversation  not found", "value", convID, "err", err)
 		return
 	}
 
@@ -115,7 +115,7 @@ func RunConversation(convID int64, sessionID int64) {
 
 	reply, err := streamRunner(sessionID, firstMessage, conv.LocalAgentID, forwarder)
 	if err != nil {
-		log.Printf("[nexus] conv %d first message error: %v", convID, err)
+		slog.Warn("conv  first message error", "value", convID, "err", err)
 		db.UpdateA2AConversationStatus(convID, "failed")
 		saveErrorMessage(convID, agentName, fmt.Sprintf("Agent 执行出错: %v", err))
 		if broadcast != nil {
@@ -125,7 +125,7 @@ func RunConversation(convID int64, sessionID int64) {
 	}
 
 	if strings.TrimSpace(reply) == "" {
-		log.Printf("[nexus] conv %d: agent returned empty reply for first message", convID)
+		slog.Info("conv : agent returned empty reply for first message", "value", convID)
 		saveErrorMessage(convID, agentName, "Agent 未能生成回复，请检查 AI 引擎配置")
 		db.UpdateA2AConversationStatus(convID, "paused")
 		if broadcast != nil {
@@ -177,13 +177,12 @@ func RunConversation(convID int64, sessionID int64) {
 		"content":           content,
 		"structured_data":   "{}",
 	}
-	log.Printf("[nexus] conv %d: sending first reply via %s transport, contentLen=%d",
-		convID, transport.Type(), len(content))
+	slog.Info("conv: sending first reply", "convID", convID, "transport", transport.Type(), "contentLen", len(content))
 	if _, err := transport.Send("/conversation/message", sendPayload); err != nil {
-		log.Printf("[nexus] conv %d: FAILED to send first reply: %v", convID, err)
+		slog.Warn("conv: FAILED to send first reply", "convID", convID, "err", err)
 		saveErrorMessage(convID, "system", fmt.Sprintf("消息发送失败: %v", err))
 	} else {
-		log.Printf("[nexus] conv %d: first reply sent successfully", convID)
+		slog.Info("conv : first reply sent successfully", "value", convID)
 	}
 }
 
@@ -193,20 +192,20 @@ func HandleIncomingMessage(convID int64, incomingContent string) {
 	mu.Lock()
 	defer mu.Unlock()
 
-	log.Printf("[nexus] HandleIncomingMessage: convID=%d contentLen=%d", convID, len(incomingContent))
+	slog.Info("HandleIncomingMessage: convID= contentLen", "value", convID, "value", len(incomingContent))
 	conv, err := db.GetA2AConversation(convID)
 	if err != nil {
-		log.Printf("[nexus] HandleIncomingMessage: conv %d not found: %v", convID, err)
+		slog.Info("HandleIncomingMessage: conv  not found", "value", convID, "err", err)
 		return
 	}
 	if conv.Status != "active" {
-		log.Printf("[nexus] HandleIncomingMessage: conv %d status=%s (not active), skipping", convID, conv.Status)
+		slog.Info("HandleIncomingMessage: conv  status= (not active), skipping", "value", convID, "status", conv.Status)
 		return
 	}
 
 	// 对方发来的消息包含 [CLOSE]，说明对方已结束对话，本地无需再回复
 	if isCloseMessage(incomingContent) {
-		log.Printf("[nexus] HandleIncomingMessage: conv %d received [CLOSE] from remote, completing", convID)
+		slog.Debug("HandleIncomingMessage: conv  received [CLOSE] from remote, completing", "value", convID)
 		db.UpdateA2AConversationStatus(convID, "completed")
 		if broadcast != nil {
 			broadcast("a2a_status_change", fmt.Sprintf(`{"id":%d,"status":"completed","reason":"remote_close"}`, convID))
@@ -238,10 +237,10 @@ func HandleIncomingMessage(convID int64, incomingContent string) {
 
 	sessionID := conv.LocalSessionID
 	if sessionID == 0 {
-		log.Printf("[nexus] HandleIncomingMessage: conv %d has no local_session_id, cannot reply", convID)
+		slog.Info("HandleIncomingMessage: conv  has no local_session_id, cannot reply", "value", convID)
 		return
 	}
-	log.Printf("[nexus] HandleIncomingMessage: conv %d using session %d, agent %d", convID, sessionID, conv.LocalAgentID)
+	slog.Info("HandleIncomingMessage: conv  using session , agent", "value", convID, "value", sessionID, "local_agent_i_d", conv.LocalAgentID)
 
 	pauseCh := make(chan struct{}, 1)
 	pausedConvs.Store(convID, pauseCh)
@@ -255,13 +254,13 @@ func HandleIncomingMessage(convID int64, incomingContent string) {
 
 	reply, err := streamRunner(sessionID, incomingContent, conv.LocalAgentID, forwarder)
 	if err != nil {
-		log.Printf("[nexus] conv %d reply error: %v", convID, err)
+		slog.Warn("conv  reply error", "value", convID, "err", err)
 		saveErrorMessage(convID, agentName, fmt.Sprintf("Agent 执行出错: %v", err))
 		return
 	}
 
 	if strings.TrimSpace(reply) == "" {
-		log.Printf("[nexus] conv %d: agent returned empty reply, skipping send", convID)
+		slog.Info("conv : agent returned empty reply, skipping send", "value", convID)
 		saveErrorMessage(convID, agentName, "Agent 未能生成回复，请检查 AI 引擎配置")
 		return
 	}
@@ -310,10 +309,9 @@ func HandleIncomingMessage(convID int64, incomingContent string) {
 		"content":           content,
 		"structured_data":   "{}",
 	}
-	log.Printf("[nexus] conv %d: sending reply via %s transport, contentLen=%d",
-		convID, transport.Type(), len(content))
+	slog.Info("conv: sending reply", "convID", convID, "transport", transport.Type(), "contentLen", len(content))
 	if _, err := transport.Send("/conversation/message", sendPayload); err != nil {
-		log.Printf("[nexus] conv %d: FAILED to send reply: %v", convID, err)
+		slog.Warn("conv: FAILED to send reply", "convID", convID, "err", err)
 		saveErrorMessage(convID, "system", fmt.Sprintf("消息发送失败: %v", err))
 	}
 }
@@ -334,7 +332,7 @@ func closeConversation(convID int64, conv *db.A2AConversation) {
 	if broadcast != nil {
 		broadcast("a2a_status_change", fmt.Sprintf(`{"id":%d,"status":"completed","reason":"close_tag"}`, convID))
 	}
-	log.Printf("[nexus] conv %d: [CLOSE] detected, conversation completed", convID)
+	slog.Info("conv : [CLOSE] detected, conversation completed", "value", convID)
 }
 
 // ─── 辅助函数 ───────────────────────────────────────────────────
@@ -374,7 +372,7 @@ func sendViaTransport(t Transport, path string, payload map[string]interface{}) 
 			return nil
 		}
 		lastErr = err
-		log.Printf("[nexus] sendViaTransport attempt %d failed: path=%s err=%v", attempt+1, path, err)
+		slog.Warn("sendViaTransport attempt  failed: path= err", "value", attempt+1, "value", path, "err", err)
 		if attempt < 2 {
 			time.Sleep(time.Duration(attempt+1) * 2 * time.Second)
 		}

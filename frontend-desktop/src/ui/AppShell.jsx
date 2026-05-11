@@ -1,4 +1,4 @@
-import { useEffect, useState, useRef, useCallback } from 'react';
+import { useEffect, useState, useRef, useCallback, lazy, Suspense } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { useStore, initStore } from '../state/useStore';
 import { SidebarSessions } from './SidebarSessions';
@@ -6,19 +6,22 @@ import { ModelSwitcher } from './ModelSwitcher';
 import { RouterPill } from './RouterPill';
 import { ChatView } from '../chat/ChatView';
 import { AgentStatePill } from '../chat/AgentStatePill';
-import { SettingsPage } from '../settings/SettingsPage';
-import SkillsPage from '../SkillsPage';
-import KnowledgePage from '../KnowledgePage';
-import IMConnectorPage from '../IMConnectorPage';
-import MCPPage from '../MCPPage';
-import AgentFactoryPage from '../AgentFactoryPage';
-import ScheduledTasksPage from '../ScheduledTasksPage';
-import WorkflowPage from '../WorkflowPage';
-import NexusPage from '../nexus/NexusPage';
-import LoginPage from '../LoginPage';
 import { ToastStack, Modal, Button } from './primitives';
+
+const SettingsPage = lazy(() => import('../settings/SettingsPage').then(m => ({ default: m.SettingsPage })));
+const SkillsPage = lazy(() => import('../SkillsPage'));
+const KnowledgePage = lazy(() => import('../KnowledgePage'));
+const IMConnectorPage = lazy(() => import('../IMConnectorPage'));
+const MCPPage = lazy(() => import('../MCPPage'));
+const AgentFactoryPage = lazy(() => import('../AgentFactoryPage'));
+const ScheduledTasksPage = lazy(() => import('../ScheduledTasksPage'));
+const WorkflowPage = lazy(() => import('../WorkflowPage'));
+const NexusPage = lazy(() => import('../nexus/NexusPage'));
+const EvolutionPage = lazy(() => import('../EvolutionPage'));
+const LoginPage = lazy(() => import('../LoginPage'));
+import EvolutionProgressPanel from './EvolutionProgressPanel';
 import { cn } from './cn';
-import { MessageSquare, Settings as SettingsIcon, Brain, BookOpen, MessageCircle, Plug, Sparkles, PanelLeftClose, PanelLeftOpen, Clock, Workflow, Globe, LogOut, User, UserPlus, Check, X } from 'lucide-react';
+import { MessageSquare, Settings as SettingsIcon, Brain, BookOpen, MessageCircle, Plug, Sparkles, PanelLeftClose, PanelLeftOpen, Clock, Workflow, Globe, LogOut, User, UserPlus, Check, X, Dna } from 'lucide-react';
 import { api, wsClient } from '../api/client';
 
 const SHORTCUTS = [
@@ -33,6 +36,14 @@ const SHORTCUTS = [
   { keys: ['/'], desc: '唤起斜杠命令' },
   { keys: ['Esc'], desc: '关闭弹窗/面板' },
 ];
+
+function PageFallback() {
+  return (
+    <div className="flex-1 flex items-center justify-center">
+      <div className="w-5 h-5 border-2 border-[color:var(--accent)] border-t-transparent rounded-full animate-spin" />
+    </div>
+  );
+}
 
 const pageMotion = {
   initial: { opacity: 0, x: 12, scale: 0.98, filter: 'blur(4px)' },
@@ -56,6 +67,7 @@ const RIGHT_TABS = [
   { id: 'im', label: 'IM', icon: MessageCircle },
   { id: 'workflow', label: '工作流', icon: Workflow },
   { id: 'scheduled', label: '定时', icon: Clock },
+  { id: 'evolution', label: '进化', icon: Dna },
   { id: 'settings', label: '设置', icon: SettingsIcon },
 ];
 
@@ -357,10 +369,10 @@ export function AppShell() {
   // 未登录，显示登录页
   if (!isLoggedIn) {
     return (
-      <>
+      <Suspense fallback={<PageFallback />}>
         <LoginPage />
         <ToastStack items={notifications} />
-      </>
+      </Suspense>
     );
   }
 
@@ -477,6 +489,7 @@ export function AppShell() {
 
         {/* 主区 */}
         <main className="flex-1 flex flex-col min-h-0 relative">
+          <Suspense fallback={<PageFallback />}>
           <AnimatePresence mode="wait">
             {view === 'chat' && (
               <motion.div key="chat" className="flex-1 flex flex-col min-h-0" {...pageMotion}>
@@ -528,7 +541,13 @@ export function AppShell() {
                 <ScheduledTasksPage />
               </motion.div>
             )}
+            {view === 'evolution' && (
+              <motion.div key="evolution" className="flex-1 overflow-auto scrollable bg-[color:var(--bg)] p-6" {...pageMotion}>
+                <EvolutionPage />
+              </motion.div>
+            )}
           </AnimatePresence>
+          </Suspense>
         </main>
       </div>
 
@@ -596,6 +615,7 @@ export function AppShell() {
       </Modal>
 
       <NexusNotificationOverlay />
+      <EvolutionProgressPanel />
       <ToastStack items={notifications} />
     </div>
   );

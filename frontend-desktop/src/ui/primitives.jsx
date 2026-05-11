@@ -99,12 +99,26 @@ export function Modal({ open, onClose, title, footer, children, width = 520 }) {
   useEffect(() => {
     if (!open) return;
     const previouslyFocused = document.activeElement;
+    const focusableSelector = 'button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])';
     const onKeyDown = (e) => {
-      if (e.key === 'Escape') onCloseRef.current?.();
+      if (e.key === 'Escape') { onCloseRef.current?.(); return; }
+      if (e.key === 'Tab') {
+        const el = dialogRef.current;
+        if (!el) return;
+        const focusable = [...el.querySelectorAll(focusableSelector)].filter(n => !n.disabled);
+        if (focusable.length === 0) { e.preventDefault(); return; }
+        const first = focusable[0];
+        const last = focusable[focusable.length - 1];
+        if (e.shiftKey) {
+          if (document.activeElement === first) { e.preventDefault(); last.focus(); }
+        } else {
+          if (document.activeElement === last) { e.preventDefault(); first.focus(); }
+        }
+      }
     };
     document.addEventListener('keydown', onKeyDown);
     requestAnimationFrame(() => {
-      const first = dialogRef.current?.querySelector('button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])');
+      const first = dialogRef.current?.querySelector(focusableSelector);
       first?.focus?.();
     });
     return () => {

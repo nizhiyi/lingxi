@@ -2,7 +2,7 @@ package connector
 
 import (
 	"context"
-	"log"
+	"log/slog"
 	"sync"
 
 	"github.com/gin-gonic/gin"
@@ -29,13 +29,13 @@ func InitManager(router gin.IRouter) {
 func (m *Manager) LoadFromDB() {
 	connectors, err := db.ListIMConnectors()
 	if err != nil {
-		log.Printf("[connector manager] LoadFromDB error: %v", err)
+		slog.Warn("[connector manager] LoadFromDB error", "err", err)
 		return
 	}
 	for _, c := range connectors {
 		if c.Enabled {
 			if err := m.Start(c.Platform, c.Config); err != nil {
-				log.Printf("[connector manager] start %s error: %v", c.Platform, err)
+				slog.Warn("[connector manager] start  error", "platform", c.Platform, "err", err)
 			}
 		}
 	}
@@ -61,9 +61,9 @@ func (m *Manager) Start(platform, configJSON string) error {
 	m.running[platform] = cancel
 
 	go func() {
-		log.Printf("[connector manager] starting %s", platform)
+		slog.Info("[connector manager] starting", "value", platform)
 		if err := conn.Start(ctx); err != nil && ctx.Err() == nil {
-			log.Printf("[connector manager] %s exited with error: %v", platform, err)
+			slog.Warn("[connector manager]  exited with error", "value", platform, "err", err)
 		}
 		m.mu.Lock()
 		delete(m.running, platform)
@@ -80,7 +80,7 @@ func (m *Manager) Stop(platform string) {
 	if cancel, ok := m.running[platform]; ok {
 		cancel()
 		delete(m.running, platform)
-		log.Printf("[connector manager] stopped %s", platform)
+		slog.Info("[connector manager] stopped", "value", platform)
 	}
 }
 

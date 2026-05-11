@@ -3,7 +3,7 @@ package nexus
 import (
 	"encoding/json"
 	"fmt"
-	"log"
+	"log/slog"
 	"net"
 	"os"
 	"sync"
@@ -69,7 +69,7 @@ func (d *Discovery) Start() {
 		GetSignalingClient().Start(settings.SignalingURL)
 	}
 
-	log.Printf("[nexus] discovery started, instanceID=%s", d.instanceID)
+	slog.Info("discovery started, instanceID", "instance_i_d", d.instanceID)
 }
 
 // Stop 停止 mDNS 服务
@@ -86,7 +86,7 @@ func (d *Discovery) Stop() {
 		d.server = nil
 	}
 	GetSignalingClient().Stop()
-	log.Println("[nexus] discovery stopped")
+	slog.Info("discovery stopped")
 }
 
 // Restart 根据新设置重新注册 mDNS
@@ -127,17 +127,17 @@ func (d *Discovery) startServer(settings *db.NexusSettings) {
 		info,
 	)
 	if err != nil {
-		log.Printf("[nexus] mdns service create error: %v", err)
+		slog.Warn("mdns service create error", "err", err)
 		return
 	}
 
 	server, err := mdns.NewServer(&mdns.Config{Zone: service})
 	if err != nil {
-		log.Printf("[nexus] mdns server start error: %v", err)
+		slog.Warn("mdns server start error", "err", err)
 		return
 	}
 	d.server = server
-	log.Printf("[nexus] mdns server broadcasting on port %d", settings.ListenPort)
+	slog.Info("mdns server broadcasting on port", "listen_port", settings.ListenPort)
 }
 
 func (d *Discovery) scanLoop() {

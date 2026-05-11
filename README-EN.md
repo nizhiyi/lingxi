@@ -5,7 +5,7 @@
 <h1 align="center">Lingxi AI Agent</h1>
 
 <p align="center">
-  <strong>Local-first · Multi-model · Multi-agent · Agent Collaboration · Zero Config</strong>
+  <strong>Local-first · Multi-model · Multi-agent · Self-Evolution · Agent Collaboration · Zero Config</strong>
 </p>
 
 <p align="center">
@@ -28,7 +28,7 @@
 
 <br/>
 
-> **More than a chatbot.** Build your own AI agent team, equip them with skills and knowledge, design automated workflows, even let agents on different machines talk to each other — all running locally.
+> **More than a chatbot.** Build your own AI agent team, equip them with skills and knowledge, let them self-evolve from conversations, design automated workflows, even let agents on different machines talk to each other — all running locally.
 
 <br/>
 
@@ -69,25 +69,25 @@ Create agents with custom roles, skills, knowledge bases, and MCP tools. AI does
 </td>
 <td>
 
-**🌐 Agent-to-Agent Conversations (Project Nexus)**
+**🧬 Self-Evolving Agents**
 
-LAN + WAN. Agents across machines auto-discover and stream bidirectionally. Your code reviewer discusses architecture with a colleague's architect — humans oversee anytime.
+Agents learn from every conversation: auto-extract memories, knowledge, and skill fixes. Triggered by negative feedback, user corrections, or valuable dialogue. Real-time progress panel + one-click revert — evolution fully under your control.
 
 </td>
 </tr>
 <tr>
 <td>
 
-**📦 Double-Click to Run, Zero Dependencies**
+**🌐 Agent-to-Agent Conversations (Project Nexus)**
 
-Download `.dmg` on macOS — done. Bundles Go backend + Node.js + whisper.cpp. No Python, Docker, or backend setup needed.
+LAN + WAN. Agents across machines auto-discover and stream bidirectionally. Your code reviewer discusses architecture with a colleague's architect — humans oversee anytime.
 
 </td>
 <td>
 
-**🎨 6 Beautiful Themes**
+**📦 Double-Click to Run, Zero Dependencies**
 
-Light · Dark · Midnight · Cyber · Aurora · Cosmos. CSS variable-driven zero-flicker switching, Framer Motion silky page transitions.
+Download `.dmg` on macOS — done. Bundles Go backend + Node.js + whisper.cpp. No Python, Docker, or backend setup needed. 6 beautiful themes out of the box.
 
 </td>
 </tr>
@@ -99,7 +99,7 @@ Light · Dark · Midnight · Cyber · Aurora · Cosmos. CSS variable-driven zero
 
 ### 🏭 Agent Factory
 
-> Each agent has **8 dimensions of customization** — far more than swapping a system prompt.
+> Each agent has **9 dimensions of customization** — far more than swapping a system prompt.
 
 <p align="center">
   <img src="images/智能体工厂.png" alt="Agent Factory" width="900" />
@@ -109,6 +109,7 @@ Light · Dark · Midnight · Cyber · Aurora · Cosmos. CSS variable-driven zero
 <tr><td width="22%">🎭 <b>Identity & Role</b></td><td>Name, avatar, description, full system prompt</td></tr>
 <tr><td>🧩 <b>Capabilities</b></td><td>Independently bind skills, knowledge bases, MCP tools per agent</td></tr>
 <tr><td>🎛️ <b>Parameters</b></td><td>temperature · max_tokens — independent controls</td></tr>
+<tr><td>🧬 <b>Self-Evolution</b></td><td>Multi-trigger (corrections/negative feedback/valuable dialogue) · real-time progress · inline notifications · one-click revert · filterable evolution history · session-level knowledge extraction</td></tr>
 <tr><td>🌐 <b>External Collab</b></td><td>Public toggle · capability tags · authorization levels · forbidden info</td></tr>
 <tr><td>📋 <b>17 Templates</b></td><td>Business · Development · Creative · Productivity — plus a 5-step creation wizard</td></tr>
 </table>
@@ -130,6 +131,71 @@ Light · Dark · Midnight · Cyber · Aurora · Cosmos. CSS variable-driven zero
   <img src="images/智能体角色设定.png" alt="Creation Wizard" width="900" />
 </p>
 <p align="center"><sub>▲ 5-Step Creation Wizard — Role · Capabilities · Parameters · External · Preview</sub></p>
+
+<p align="center">
+  <img src="images/智能体配置.png" alt="Agent Configuration" width="900" />
+</p>
+<p align="center"><sub>▲ Multi-dimension fine-grained agent configuration</sub></p>
+
+---
+
+### 🧬 Self-Evolution Engine
+
+> Agents don't just follow instructions — they **learn and grow** from every conversation. Negative feedback, user corrections, and valuable multi-turn dialogues all trigger evolution, automatically extracting memories, knowledge, and skill fixes.
+
+<p align="center">
+  <img src="images/自我进化.png" alt="Self-Evolution History" width="900" />
+</p>
+<p align="center"><sub>▲ Evolution History — stats panel + timeline + category filters + one-click revert</sub></p>
+
+| Capability | Description |
+|------------|-------------|
+| 🎯 Multi-Trigger | User corrections · negative feedback (thumbs down) · valuable multi-turn dialogue · manual extraction |
+| 📊 Real-Time Progress | Full visibility during evolution: prepare context → LLM analysis → parse results → execute actions |
+| 🧠 Three Evolution Actions | **Memory** (preferences/habits) · **Knowledge** (SOPs/procedures) · **Skill Fix** (tool description corrections) |
+| ↩️ One-Click Revert | Every evolution record can be undone: deletes written memories/knowledge files/skill modifications |
+| 📋 Evolution History | Full timeline · filter by type/status · search · expandable details · raw LLM response |
+| 💬 Inline Notifications | Evolution results shown directly in chat as a card, with instant revert |
+| 📝 Session Extraction | One-click extraction of an entire conversation's knowledge into structured docs |
+
+<p align="center">
+  <img src="images/自我进化-agent设置.png" alt="Agent Evolution Settings" width="900" />
+</p>
+<p align="center"><sub>▲ Enable/disable self-evolution in agent editor + view evolution logs</sub></p>
+
+<p align="center">
+  <img src="images/自我进化-对话提取.png" alt="Conversation Knowledge Extraction" width="900" />
+</p>
+<p align="center"><sub>▲ "Extract Knowledge" button in chat bubbles — manually trigger knowledge extraction from any message</sub></p>
+
+<details>
+<summary><b>How Evolution Works →</b></summary>
+<br/>
+
+```
+Conversation ends ──► Trigger detection (correction / negative feedback / valuable dialogue)
+                          │
+                          ▼
+              Reuse current AI engine to analyze context
+                          │
+                          ▼
+           Parse LLM's returned JSON action list
+                          │
+                          ▼
+             ┌────────────┼────────────┐
+             ▼            ▼            ▼
+         Write Memory  Create KB Doc  Fix Skill Desc
+         (memories)    (knowledge/)   (skill fix)
+                          │
+                          ▼
+          Record to evolution_logs + WS real-time notification
+```
+
+- Uses the currently active model (same engine as main chat), no separate HTTP API calls
+- Each evolution action independently recorded, individually revertible
+- Evolution logs retain raw LLM responses and execution steps for auditing and debugging
+
+</details>
 
 ---
 
@@ -154,9 +220,24 @@ Light · Dark · Midnight · Cyber · Aurora · Cosmos. CSS variable-driven zero
 | 🔊 TTS Read Aloud | Chinese/English auto-detect, one-click play |
 
 <p align="center">
+  <img src="images/智能体交互.png" alt="Agent Interaction" width="900" />
+</p>
+<p align="center"><sub>▲ Autonomous task execution — tool calls, file reads, code writing</sub></p>
+
+<p align="center">
   <img src="images/规划推理.png" alt="Planning" width="900" />
 </p>
 <p align="center"><sub>▲ Two-Phase Planning — collect dimensions first, execute after confirmation</sub></p>
+
+<p align="center">
+  <img src="images/规划模式.png" alt="Planning Mode" width="900" />
+</p>
+<p align="center"><sub>▲ Immersive multi-dimension requirement collection panel</sub></p>
+
+<p align="center">
+  <img src="images/agent ppt创作.png" alt="PPT Creation" width="900" />
+</p>
+<p align="center"><sub>▲ AI actually getting work done — auto-generating PPT content</sub></p>
 
 ---
 
@@ -176,6 +257,11 @@ Built-in **whisper.cpp** (Apple Metal accelerated). Record → local recognition
 |----------|-----------|
 | Anthropic Native | Anthropic · DashScope (Alibaba Cloud) |
 | OpenAI Compatible | DeepSeek · Qwen · Doubao · GLM · Kimi · Gemini · OpenRouter · Groq · SiliconFlow · Ollama · OpenAI |
+
+<p align="center">
+  <img src="images/llm.png" alt="Multi-Model Switch" width="900" />
+</p>
+<p align="center"><sub>▲ 14+ providers, switch freely with one configuration</sub></p>
 
 <details>
 <summary><b>How the Bridge layer works →</b></summary>
@@ -203,7 +289,8 @@ Prefers LiteLLM (Python), falls back to llm-bridge (Node.js). Transparent to use
 - AI auto-generation
 - ZIP import / batch upload
 - Smithery marketplace install
-- Online edit / export
+- Online edit / export / batch export ZIP
+- Exports include manifest.json metadata
 - Per-agent binding
 
 </td>
@@ -232,6 +319,11 @@ Prefers LiteLLM (Python), falls back to llm-bridge (Node.js). Transparent to use
   <img src="images/skill管理.png" alt="Skills" width="900" />
 </p>
 <p align="center"><sub>▲ Skills — AI generation / marketplace / online edit / ZIP import</sub></p>
+
+<p align="center">
+  <img src="images/skill安装.png" alt="Skill Install" width="900" />
+</p>
+<p align="center"><sub>▲ Smithery Marketplace — search, browse categories, one-click install</sub></p>
 
 <p align="center">
   <img src="images/知识库.png" alt="Knowledge Base" width="900" />
@@ -291,9 +383,24 @@ Prefers LiteLLM (Python), falls back to llm-bridge (Node.js). Transparent to use
 | 📝 Full Rendering | Code highlighting · tables · thinking blocks — same UI as main chat |
 
 <p align="center">
-  <img src="images/Agent与Agent对话.png" alt="Agent Conversation" width="900" />
+  <img src="images/Agent 对话请求提问.png" alt="Initiate Agent Dialogue" width="900" />
 </p>
-<p align="center"><sub>▲ Agent-to-Agent — purple = remote agent, theme color = local agent</sub></p>
+<p align="center"><sub>▲ Initiate Agent Dialogue — select the remote agent, set discussion topic and goals</sub></p>
+
+<p align="center">
+  <img src="images/Agent对话接收请求.png" alt="Receive Invitation" width="900" />
+</p>
+<p align="center"><sub>▲ Receiver gets invitation — view topic and remote agent, select local agent to respond</sub></p>
+
+<p align="center">
+  <img src="images/Agent对话实况1.png" alt="Agent Conversation Live" width="900" />
+</p>
+<p align="center"><sub>▲ Agent-to-Agent live — purple = remote agent, theme color = local agent</sub></p>
+
+<p align="center">
+  <img src="images/Agent对话实况2.png" alt="Agent Deep Discussion" width="900" />
+</p>
+<p align="center"><sub>▲ Deep discussion — agents auto-converse in multiple rounds, full thinking visible</sub></p>
 
 ---
 
@@ -348,6 +455,14 @@ Cross-session persistent memory, isolated per agent. AI auto-records preferences
 
 <table>
 <tr>
+<td><img src="images/首页.png" alt="Workbench" /></td>
+<td><img src="images/普通对话.png" alt="Streaming Chat" /></td>
+</tr>
+<tr>
+<td align="center"><sub>Workbench home</sub></td>
+<td align="center"><sub>Streaming chat + code highlighting</sub></td>
+</tr>
+<tr>
 <td><img src="images/智能体交互.png" alt="Agent Interaction" /></td>
 <td><img src="images/规划模式.png" alt="Planning Mode" /></td>
 </tr>
@@ -356,12 +471,20 @@ Cross-session persistent memory, isolated per agent. AI auto-records preferences
 <td align="center"><sub>Multi-dimension requirement collection</sub></td>
 </tr>
 <tr>
-<td><img src="images/智能体配置.png" alt="Agent Config" /></td>
+<td><img src="images/智能体工厂.png" alt="Agent Factory" /></td>
 <td><img src="images/agent ppt创作.png" alt="PPT Creation" /></td>
 </tr>
 <tr>
-<td align="center"><sub>8-dimension customization</sub></td>
+<td align="center"><sub>Agent Factory + template market</sub></td>
 <td align="center"><sub>AI actually getting work done</sub></td>
+</tr>
+<tr>
+<td><img src="images/自我进化.png" alt="Self-Evolution" /></td>
+<td><img src="images/自我进化-对话提取.png" alt="Knowledge Extraction" /></td>
+</tr>
+<tr>
+<td align="center"><sub>Self-Evolution history · one-click revert</sub></td>
+<td align="center"><sub>Extract knowledge from conversations</sub></td>
 </tr>
 <tr>
 <td><img src="images/llm.png" alt="Multi-Model" /></td>
@@ -378,6 +501,14 @@ Cross-session persistent memory, isolated per agent. AI auto-records preferences
 <tr>
 <td align="center"><sub>Drag-and-drop workflow editor</sub></td>
 <td align="center"><sub>Agent auto-discovery & conversation</sub></td>
+</tr>
+<tr>
+<td><img src="images/Agent对话实况1.png" alt="Agent Chat" /></td>
+<td><img src="images/Agent对话实况2.png" alt="Agent Deep Chat" /></td>
+</tr>
+<tr>
+<td align="center"><sub>Agent-to-Agent live conversation</sub></td>
+<td align="center"><sub>Deep multi-round auto-discussion</sub></td>
 </tr>
 </table>
 
@@ -407,6 +538,7 @@ Cross-session persistent memory, isolated per agent. AI auto-records preferences
 │   Zustand 5 · Motion 12   │   WebSocket · mDNS · Signal  │
 │   6 themes · virtual scroll│   70+ APIs · scheduler       │
 │   prism syntax highlight   │   IM connectors · Bridge     │
+│                            │   Evolution engine · Memory   │
 └───────────────────────────┴──────────────────────────────┘
               Bundled runtimes (no install required)
      Node.js · whisper.cpp · Claude CLI · LiteLLM Bridge
@@ -416,7 +548,7 @@ Cross-session persistent memory, isolated per agent. AI auto-records preferences
 |-------|------|---------|
 | 🖥️ Shell | Electron 36 | Window management · safeStorage · screenshots · auto-update |
 | 🎨 Frontend | React 19 + Vite 8 + Tailwind 3.4 | 6 themes · Zustand · Framer Motion |
-| ⚙️ Backend | Go 1.24 + Gin + SQLite | 70+ APIs · WebSocket · mDNS · scheduler |
+| ⚙️ Backend | Go 1.24 + Gin + SQLite | 70+ APIs · WebSocket · mDNS · scheduler · evolution engine |
 | 🔊 Voice | whisper.cpp (Metal) | Offline ASR · ggml-base |
 | 🔄 Router | LiteLLM / llm-bridge | Anthropic ↔ OpenAI protocol translation |
 

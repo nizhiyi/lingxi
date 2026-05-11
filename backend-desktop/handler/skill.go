@@ -7,12 +7,13 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"log"
+	"log/slog"
 	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/gin-gonic/gin"
 	"lingxi-agent/config"
@@ -45,6 +46,10 @@ func claudeSkillsDir() string {
 
 // ListSkills GET /api/skills
 func ListSkills(c *gin.Context) {
+	if cached, ok := apiCache.Get("skills"); ok {
+		c.JSON(http.StatusOK, cached)
+		return
+	}
 	rows, err := db.DB.Query(`
 		SELECT id, name, description, file_path, installed, source, marketplace_id, marketplace_version, author, created_at, updated_at
 		FROM skills ORDER BY created_at DESC
@@ -63,8 +68,11 @@ func ListSkills(c *gin.Context) {
 		}
 		skills = append(skills, s)
 	}
+	apiCache.Set("skills", skills)
 	c.JSON(http.StatusOK, skills)
 }
+
+func invalidateSkillsCache() { apiCache.Invalidate("skills") }
 
 // UploadSkill POST /api/skills/upload — 上传单个 zip
 func UploadSkill(c *gin.Context) {
@@ -91,6 +99,7 @@ func UploadSkill(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
+	invalidateSkillsCache()
 	c.JSON(http.StatusOK, skill)
 }
 
@@ -148,6 +157,7 @@ func BatchUploadSkill(c *gin.Context) {
 		results = append(results, r)
 	}
 
+	invalidateSkillsCache()
 	c.JSON(http.StatusOK, gin.H{"results": results})
 }
 
@@ -196,12 +206,13 @@ func InstallSkill(c *gin.Context) {
 	}
 
 	if err := deploySkillFromFile(skill.Name, skill.FilePath); err != nil {
-		log.Printf("[skill] deploy error: %v", err)
+		slog.Warn("deploy error", "err", err)
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "安装失败: " + err.Error()})
 		return
 	}
 
 	db.DB.Exec(`UPDATE skills SET installed=1, updated_at=CURRENT_TIMESTAMP WHERE id=?`, id)
+	invalidateSkillsCache()
 	c.JSON(http.StatusOK, gin.H{"message": "安装成功"})
 }
 
@@ -221,6 +232,7 @@ func UninstallSkill(c *gin.Context) {
 	os.RemoveAll(skillDir)
 
 	db.DB.Exec(`UPDATE skills SET installed=0, updated_at=CURRENT_TIMESTAMP WHERE id=?`, id)
+	invalidateSkillsCache()
 	c.JSON(http.StatusOK, gin.H{"message": "卸载成功"})
 }
 
@@ -242,6 +254,7 @@ func DeleteSkill(c *gin.Context) {
 	os.Remove(skill.FilePath)
 
 	db.DB.Exec(`DELETE FROM skills WHERE id=?`, id)
+	invalidateSkillsCache()
 	c.JSON(http.StatusOK, gin.H{"message": "删除成功"})
 }
 
@@ -269,6 +282,7 @@ func BatchDeleteSkills(c *gin.Context) {
 		db.DB.Exec(`DELETE FROM skills WHERE id=?`, id)
 		deleted++
 	}
+	invalidateSkillsCache()
 	c.JSON(http.StatusOK, gin.H{"deleted": deleted})
 }
 
@@ -287,12 +301,12 @@ func BootstrapInstalledSkills() {
 			continue
 		}
 		if err := deploySkillFromFile(name, filePath); err != nil {
-			log.Printf("[skill] bootstrap deploy %s error: %v", name, err)
+			slog.Warn("bootstrap deploy  error", "value", name, "err", err)
 		} else {
 			count++
 		}
 	}
-	log.Printf("[skill] bootstrapped %d installed skills", count)
+	slog.Info("bootstrapped  installed skills", "value", count)
 }
 
 func deploySkillFromFile(name, filePath string) error {
@@ -393,7 +407,7 @@ func GenerateSkillStream(c *gin.Context) {
 	go func() {
 		s := bufio.NewScanner(stderrPipe)
 		for s.Scan() {
-			log.Printf("[skill-gen stderr] %s", s.Text())
+			slog.Info("[skill-gen stderr]", "text()", s.Text())
 		}
 	}()
 
@@ -524,6 +538,7 @@ func ConfirmGeneratedSkill(c *gin.Context) {
 	db.DB.QueryRow(`SELECT id, name, description, file_path, installed, created_at, updated_at FROM skills WHERE name=?`, body.SkillName).
 		Scan(&skill.ID, &skill.Name, &skill.Description, &skill.FilePath, &skill.Installed, &skill.CreatedAt, &skill.UpdatedAt)
 
+	invalidateSkillsCache()
 	c.JSON(http.StatusOK, skill)
 }
 
@@ -624,34 +639,182 @@ func UpdateSkillContent(c *gin.Context) {
 	// 如果已安装，重新部署
 	if skill.Installed {
 		if err := deploySkillFromFile(skill.Name, filePath); err != nil {
-			log.Printf("[skill] redeploy after edit error: %v", err)
+			slog.Warn("redeploy after edit error", "err", err)
 		}
 	}
 
+	invalidateSkillsCache()
 	c.JSON(http.StatusOK, gin.H{"message": "保存成功"})
 }
 
-// ExportSkill GET /api/skills/:id/export — 下载 skill 的 zip 包
+type skillManifest struct {
+	Name        string `json:"name"`
+	Description string `json:"description"`
+	Author      string `json:"author"`
+	Version     string `json:"version"`
+	Source      string `json:"source"`
+	ExportedAt  string `json:"exported_at"`
+}
+
+func buildSkillZipWithManifest(skill model.Skill) ([]byte, error) {
+	skillDir := filepath.Join(claudeSkillsDir(), skill.Name)
+	if info, err := os.Stat(skillDir); err == nil && info.IsDir() {
+		return zipDirWithManifest(skillDir, skill)
+	}
+	if skill.FilePath == "" {
+		return nil, fmt.Errorf("没有可导出的文件")
+	}
+	data, err := os.ReadFile(skill.FilePath)
+	if err != nil {
+		return nil, fmt.Errorf("读取文件失败")
+	}
+	return injectManifestIntoZip(data, skill)
+}
+
+func zipDirWithManifest(dir string, skill model.Skill) ([]byte, error) {
+	var buf bytes.Buffer
+	w := zip.NewWriter(&buf)
+	prefix := skill.Name
+	err := filepath.Walk(dir, func(path string, info os.FileInfo, err error) error {
+		if err != nil {
+			return nil
+		}
+		rel, _ := filepath.Rel(dir, path)
+		rel = filepath.ToSlash(rel)
+		zipPath := prefix + "/" + rel
+		if info.IsDir() {
+			if rel != "." {
+				w.Create(zipPath + "/")
+			}
+			return nil
+		}
+		fw, err := w.Create(zipPath)
+		if err != nil {
+			return err
+		}
+		data, _ := os.ReadFile(path)
+		_, err = fw.Write(data)
+		return err
+	})
+	if err != nil {
+		return nil, err
+	}
+	manifest := skillManifest{
+		Name:        skill.Name,
+		Description: skill.Description,
+		Author:      skill.Author,
+		Version:     skill.MarketplaceVersion,
+		Source:      skill.Source,
+		ExportedAt:  time.Now().Format(time.RFC3339),
+	}
+	mData, _ := json.MarshalIndent(manifest, "", "  ")
+	fw, _ := w.Create(prefix + "/manifest.json")
+	fw.Write(mData)
+	w.Close()
+	return buf.Bytes(), nil
+}
+
+func injectManifestIntoZip(zipData []byte, skill model.Skill) ([]byte, error) {
+	r, err := zip.NewReader(bytes.NewReader(zipData), int64(len(zipData)))
+	if err != nil {
+		return zipData, nil
+	}
+	var rootDir string
+	for _, f := range r.File {
+		parts := strings.SplitN(filepath.ToSlash(f.Name), "/", 2)
+		if len(parts) > 0 && parts[0] != "" {
+			rootDir = parts[0]
+			break
+		}
+	}
+	if rootDir == "" {
+		rootDir = skill.Name
+	}
+	var buf bytes.Buffer
+	w := zip.NewWriter(&buf)
+	for _, f := range r.File {
+		fw, err := w.Create(f.Name)
+		if err != nil {
+			continue
+		}
+		rc, err := f.Open()
+		if err != nil {
+			continue
+		}
+		io.Copy(fw, rc)
+		rc.Close()
+	}
+	manifest := skillManifest{
+		Name:        skill.Name,
+		Description: skill.Description,
+		Author:      skill.Author,
+		Version:     skill.MarketplaceVersion,
+		Source:      skill.Source,
+		ExportedAt:  time.Now().Format(time.RFC3339),
+	}
+	mData, _ := json.MarshalIndent(manifest, "", "  ")
+	fw, _ := w.Create(rootDir + "/manifest.json")
+	fw.Write(mData)
+	w.Close()
+	return buf.Bytes(), nil
+}
+
+// ExportSkill GET /api/skills/:id/export — 下载 skill 的 zip 包（含 manifest.json）
 func ExportSkill(c *gin.Context) {
 	id := c.Param("id")
 	var skill model.Skill
-	err := db.DB.QueryRow(`SELECT id, name, file_path FROM skills WHERE id=?`, id).
-		Scan(&skill.ID, &skill.Name, &skill.FilePath)
+	err := db.DB.QueryRow(`SELECT id, name, description, file_path, installed, source, marketplace_version, author FROM skills WHERE id=?`, id).
+		Scan(&skill.ID, &skill.Name, &skill.Description, &skill.FilePath, &skill.Installed, &skill.Source, &skill.MarketplaceVersion, &skill.Author)
 	if err != nil {
 		c.JSON(http.StatusNotFound, gin.H{"error": "skill 不存在"})
 		return
 	}
-	if skill.FilePath == "" {
-		c.JSON(http.StatusNotFound, gin.H{"error": "没有可导出的文件"})
-		return
-	}
-	data, err := os.ReadFile(skill.FilePath)
+	data, err := buildSkillZipWithManifest(skill)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "读取文件失败"})
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
 	c.Header("Content-Disposition", fmt.Sprintf(`attachment; filename="%s.zip"`, skill.Name))
 	c.Data(http.StatusOK, "application/zip", data)
+}
+
+// BatchExportSkills POST /api/skills/batch-export — 批量导出多个 skill 为单个 zip
+func BatchExportSkills(c *gin.Context) {
+	var body struct {
+		IDs []int64 `json:"ids"`
+	}
+	if err := c.ShouldBindJSON(&body); err != nil || len(body.IDs) == 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "ids 不能为空"})
+		return
+	}
+	var buf bytes.Buffer
+	outerZip := zip.NewWriter(&buf)
+	exported := 0
+	for _, id := range body.IDs {
+		var skill model.Skill
+		err := db.DB.QueryRow(`SELECT id, name, description, file_path, installed, source, marketplace_version, author FROM skills WHERE id=?`, id).
+			Scan(&skill.ID, &skill.Name, &skill.Description, &skill.FilePath, &skill.Installed, &skill.Source, &skill.MarketplaceVersion, &skill.Author)
+		if err != nil {
+			continue
+		}
+		data, err := buildSkillZipWithManifest(skill)
+		if err != nil {
+			continue
+		}
+		fw, err := outerZip.Create(fmt.Sprintf("%s.zip", skill.Name))
+		if err != nil {
+			continue
+		}
+		fw.Write(data)
+		exported++
+	}
+	outerZip.Close()
+	if exported == 0 {
+		c.JSON(http.StatusNotFound, gin.H{"error": "没有可导出的技能"})
+		return
+	}
+	c.Header("Content-Disposition", `attachment; filename="skills-export.zip"`)
+	c.Data(http.StatusOK, "application/zip", buf.Bytes())
 }
 
 // readZipFiles 从 zip 字节读取文件列表

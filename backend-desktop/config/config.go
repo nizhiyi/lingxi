@@ -20,6 +20,10 @@ type Config struct {
 		BaseURL   string // ANTHROPIC_BASE_URL
 		ModelEnv  string // ANTHROPIC_MODEL（覆盖 settings.json）
 	}
+	DingTalk struct {
+		ClientID     string
+		ClientSecret string
+	}
 }
 
 var (
@@ -46,6 +50,11 @@ func Get() *Config {
 		override(&cfg.Claude.AuthToken, "ANTHROPIC_AUTH_TOKEN")
 		override(&cfg.Claude.BaseURL, "ANTHROPIC_BASE_URL")
 		override(&cfg.Claude.ModelEnv, "ANTHROPIC_MODEL")
+
+		cfg.DingTalk.ClientID = ""
+		cfg.DingTalk.ClientSecret = ""
+		override(&cfg.DingTalk.ClientID, "DINGTALK_CLIENT_ID")
+		override(&cfg.DingTalk.ClientSecret, "DINGTALK_CLIENT_SECRET")
 	})
 	return &cfg
 }

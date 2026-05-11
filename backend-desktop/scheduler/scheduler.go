@@ -2,7 +2,7 @@ package scheduler
 
 import (
 	"fmt"
-	"log"
+	"log/slog"
 	"strconv"
 	"strings"
 	"time"
@@ -17,8 +17,9 @@ type ChatRunner func(message string, sessionID int64) (reply string, usedSession
 type NotifyFunc func(taskName, summary string)
 
 var (
-	runner ChatRunner
-	notify NotifyFunc
+	runner   ChatRunner
+	notify   NotifyFunc
+	stopChan chan struct{}
 )
 
 // Init 注入依赖
@@ -29,24 +30,37 @@ func Init(chatRunner ChatRunner, notifyFn NotifyFunc) {
 
 // Start 启动调度循环（后台 goroutine，每分钟检查一次到期任务）
 func Start() {
+	stopChan = make(chan struct{})
 	go func() {
 		ticker := time.NewTicker(15 * time.Second)
 		defer ticker.Stop()
 
-		// 启动后立即检查一次
 		checkAndRun()
 
-		for range ticker.C {
-			checkAndRun()
+		for {
+			select {
+			case <-ticker.C:
+				checkAndRun()
+			case <-stopChan:
+				slog.Info("stopped")
+				return
+			}
 		}
 	}()
-	log.Println("[scheduler] started (interval=15s)")
+	slog.Info("started (interval=15s)")
+}
+
+// Stop 停止调度循环
+func Stop() {
+	if stopChan != nil {
+		close(stopChan)
+	}
 }
 
 func checkAndRun() {
 	tasks, err := db.GetDueScheduledTasks()
 	if err != nil {
-		log.Printf("[scheduler] query due tasks: %v", err)
+		slog.Info("query due tasks", "err", err)
 		return
 	}
 	for _, t := range tasks {
@@ -60,7 +74,7 @@ func RunTaskNow(t db.ScheduledTask) {
 }
 
 func executeTask(t db.ScheduledTask) {
-	log.Printf("[scheduler] executing task %d: %s", t.ID, t.Name)
+	slog.Info("executing task", "i_d", t.ID, "name", t.Name)
 
 	// 立即更新 next_run_at，防止 15s 检查周期内重复触发
 	nextRun := CalcNextRun(t.CronExpr, time.Now())
@@ -77,7 +91,7 @@ func executeTask(t db.ScheduledTask) {
 		}
 		res, err := db.DB.Exec(`INSERT INTO sessions (title, agent_id) VALUES (?, ?)`, title, t.AgentID)
 		if err != nil {
-			log.Printf("[scheduler] create session for task %d: %v", t.ID, err)
+			slog.Info("create session for task", "i_d", t.ID, "err", err)
 			return
 		}
 		sessionID, _ = res.LastInsertId()
@@ -88,7 +102,7 @@ func executeTask(t db.ScheduledTask) {
 
 	runID, err := db.CreateScheduledTaskRun(t.ID, sessionID)
 	if err != nil {
-		log.Printf("[scheduler] create run record: %v", err)
+		slog.Info("create run record", "err", err)
 		return
 	}
 
@@ -99,7 +113,7 @@ func executeTask(t db.ScheduledTask) {
 
 	reply, _, runErr := runner(t.Prompt, sessionID)
 	if runErr != nil {
-		log.Printf("[scheduler] task %d run error: %v", t.ID, runErr)
+		slog.Warn("task  run error", "i_d", t.ID, "err", runErr)
 		db.FinishScheduledTaskRun(runID, "failed", runErr.Error())
 	} else {
 		summary := reply
@@ -118,7 +132,7 @@ func executeTask(t db.ScheduledTask) {
 		notify(t.Name, fmt.Sprintf("定时任务「%s」已%s|session_id:%d", t.Name, status, sessionID))
 	}
 
-	log.Printf("[scheduler] task %d done, next_run=%v", t.ID, nextRun)
+	slog.Info("task  done, next_run", "i_d", t.ID, "value", nextRun)
 }
 
 // CalcNextRun 根据 cron 表达式计算下一次运行时间。

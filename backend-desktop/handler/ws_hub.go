@@ -3,8 +3,9 @@ package handler
 import (
 	"encoding/json"
 	"fmt"
-	"log"
+	"log/slog"
 	"net/http"
+	"strings"
 	"sync"
 
 	"github.com/gin-gonic/gin"
@@ -29,7 +30,7 @@ func (c *wsClient) writeMsg(msg WSMessage) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if err := c.conn.WriteJSON(msg); err != nil {
-		log.Printf("[ws] write error: %v", err)
+		slog.Warn("write error", "err", err)
 	}
 }
 
@@ -45,7 +46,7 @@ func (h *Hub) register(c *wsClient) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	h.clients = append(h.clients, c)
-	log.Printf("[ws] client registered, total=%d", len(h.clients))
+	slog.Info("client registered, total", "clients)", len(h.clients))
 }
 
 func (h *Hub) unregister(c *wsClient) {
@@ -58,7 +59,7 @@ func (h *Hub) unregister(c *wsClient) {
 		}
 	}
 	h.clients = newList
-	log.Printf("[ws] client unregistered, remaining=%d", len(h.clients))
+	slog.Info("client unregistered, remaining", "clients)", len(h.clients))
 }
 
 // Send 向订阅了指定 session 的所有连接推送消息
@@ -110,7 +111,20 @@ func BroadcastWSEvent(event, data string) {
 }
 
 var upgrader = websocket.Upgrader{
-	CheckOrigin: func(r *http.Request) bool { return true },
+	CheckOrigin: func(r *http.Request) bool {
+		origin := r.Header.Get("Origin")
+		if origin == "" {
+			return true
+		}
+		if strings.HasPrefix(origin, "http://localhost:") ||
+			strings.HasPrefix(origin, "http://127.0.0.1:") ||
+			origin == "file://" ||
+			strings.HasPrefix(origin, "app://") {
+			return true
+		}
+		slog.Warn("rejected origin", "value", origin)
+		return false
+	},
 }
 
 // WsHandler GET /api/ws?sessionId=xxx
@@ -120,7 +134,7 @@ var upgrader = websocket.Upgrader{
 func WsHandler(c *gin.Context) {
 	conn, err := upgrader.Upgrade(c.Writer, c.Request, nil)
 	if err != nil {
-		log.Printf("[ws] upgrade error: %v", err)
+		slog.Warn("upgrade error", "err", err)
 		return
 	}
 
@@ -160,10 +174,10 @@ func WsHandler(c *gin.Context) {
 		switch cmd.Type {
 		case "subscribe", "switch_session":
 			client.sessionIDs[cmd.SessionID] = true
-			log.Printf("[ws] subscribed session=%d", cmd.SessionID)
+			slog.Info("subscribed session", "session_i_d", cmd.SessionID)
 		case "unsubscribe":
 			delete(client.sessionIDs, cmd.SessionID)
-			log.Printf("[ws] unsubscribed session=%d", cmd.SessionID)
+			slog.Info("unsubscribed session", "session_i_d", cmd.SessionID)
 		}
 		client.mu.Unlock()
 	}

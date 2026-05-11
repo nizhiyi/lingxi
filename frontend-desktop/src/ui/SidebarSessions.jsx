@@ -1,7 +1,8 @@
 import { useState, useRef, useEffect, useCallback, useMemo } from 'react';
 import { useStore } from '../state/useStore';
-import { Plus, MessageSquare, Trash2, Search, ChevronDown, Sparkles, Settings as SettingsIcon, Pencil, Pin, CheckSquare, Square, X } from 'lucide-react';
+import { Plus, MessageSquare, Trash2, Search, ChevronDown, Sparkles, Settings as SettingsIcon, Pencil, Pin, CheckSquare, Square, X, BookOpen } from 'lucide-react';
 import { Input, Button, Modal } from './primitives';
+import { api } from '../api/client';
 import { cn } from './cn';
 
 function groupSessionsByDate(sessions) {
@@ -49,6 +50,7 @@ export function SidebarSessions() {
   const [q, setQ] = useState('');
   const [agentMenuOpen, setAgentMenuOpen] = useState(false);
   const [deleteTarget, setDeleteTarget] = useState(null);
+  const [extractKB, setExtractKB] = useState(false);
   const [batchMode, setBatchMode] = useState(false);
   const [selected, setSelected] = useState(new Set());
   const [batchDeleteOpen, setBatchDeleteOpen] = useState(false);
@@ -83,10 +85,14 @@ export function SidebarSessions() {
 
   const handleConfirmDelete = useCallback(async () => {
     if (deleteTarget) {
+      if (extractKB) {
+        api.extractSessionKnowledge(deleteTarget.id).catch(() => {});
+      }
       await deleteSession(deleteTarget.id);
       setDeleteTarget(null);
+      setExtractKB(false);
     }
-  }, [deleteTarget, deleteSession]);
+  }, [deleteTarget, deleteSession, extractKB]);
 
   return (
     <div className="flex flex-col h-full pt-3 pb-3 px-3 gap-2.5">
@@ -222,12 +228,24 @@ export function SidebarSessions() {
         )}
       </div>
 
-      <Modal open={!!deleteTarget} onClose={() => setDeleteTarget(null)} title="确认删除" width={380}>
-        <p className="text-sm text-[color:var(--text-soft)] mb-4">
+      <Modal open={!!deleteTarget} onClose={() => { setDeleteTarget(null); setExtractKB(false); }} title="确认删除" width={400}>
+        <p className="text-sm text-[color:var(--text-soft)] mb-3">
           确定要删除对话 <span className="font-medium text-[color:var(--text)]">「{deleteTarget?.title || '新对话'}」</span>？此操作不可恢复。
         </p>
+        <label className="flex items-center gap-2 px-3 py-2.5 rounded-lg bg-[color:var(--bg-soft)] cursor-pointer mb-4 select-none group">
+          <input
+            type="checkbox"
+            checked={extractKB}
+            onChange={(e) => setExtractKB(e.target.checked)}
+            className="accent-[color:var(--accent)] w-3.5 h-3.5"
+          />
+          <BookOpen size={14} className="text-[color:var(--accent)] shrink-0" />
+          <span className="text-xs text-[color:var(--text-soft)] group-hover:text-[color:var(--text)]">
+            删除前提炼知识（后台异步提取对话中的有价值信息到知识库）
+          </span>
+        </label>
         <div className="flex justify-end gap-2">
-          <Button variant="outline" size="sm" onClick={() => setDeleteTarget(null)}>取消</Button>
+          <Button variant="outline" size="sm" onClick={() => { setDeleteTarget(null); setExtractKB(false); }}>取消</Button>
           <Button variant="danger" size="sm" onClick={handleConfirmDelete}>删除</Button>
         </div>
       </Modal>

@@ -15,7 +15,7 @@
 ### 前端 `frontend-desktop/`
 - **React 19** + **Vite 8**（构建需 Node.js ≥ 20.19 或 ≥ 22.12）
 - **Tailwind CSS 3.4** — 全局样式，6 套主题通过 CSS 变量切换
-- **Zustand 5** — 全局状态管理（`src/state/useStore.js`）
+- **Zustand 5** — 全局状态管理（`src/state/useStore.js`，模块化切片：auth/ui/session/chat/nexus）
 - **Framer Motion 12** — 页面过渡、列表动画
 - **Lucide React** — 图标（不使用 emoji）
 - **prism-react-renderer 2** — 代码高亮
@@ -43,26 +43,39 @@ lingxi-agent/
 ├── backend-desktop/          # Go 后端
 │   ├── main.go               # 入口 + 路由注册
 │   ├── config/               # 配置管理
-│   ├── db/                   # SQLite 数据层
-│   │   ├── db.go             # 表定义、CRUD
+│   ├── logger/               # 结构化日志（slog JSON + LOG_LEVEL 环境变量）
+│   ├── db/                   # SQLite 数据层（模块化拆分）
+│   │   ├── db.go             # 初始化 + 迁移（schema_version 版本化）
+│   │   ├── session.go        # 会话/任务/挂起任务 CRUD
+│   │   ├── knowledge.go      # 知识库/分类 CRUD
+│   │   ├── provider.go       # Provider/APIProfile CRUD
+│   │   ├── usage.go          # 用量记录/配额 CRUD
+│   │   ├── scheduled.go      # 定时任务 CRUD
+│   │   ├── auth.go           # 用户/OAuth 配置 CRUD
+│   │   ├── im_connector.go   # IM 连接器 CRUD
+│   │   ├── evolution.go      # 自我进化日志 CRUD + InsertMemory
 │   │   ├── nexus.go          # Nexus 表 CRUD（peers/contacts/a2a）
 │   │   └── mcp_agent.go      # MCP-Agent 关联
 │   ├── handler/              # HTTP Handlers
-│   │   ├── agent.go          # 智能体 CRUD
+│   │   ├── agent.go          # 智能体 CRUD（含 API 缓存）
+│   │   ├── cache.go          # TTL 缓存（sync.RWMutex，30s）
 │   │   ├── chat.go           # 对话 + WebSocket 流式
 │   │   ├── knowledge.go      # 知识库（支持 .md/.txt/.csv/.json/.pdf/.docx）
 │   │   ├── session.go        # 会话管理 + 消息搜索
-│   │   ├── provider.go       # 模型接入点
-│   │   ├── skill.go          # 技能管理
+│   │   ├── provider.go       # 模型接入点（含 API 缓存）
+│   │   ├── skill.go          # 技能管理（含 API 缓存 + 增强导出）
 │   │   ├── mcp.go            # MCP 服务管理
 │   │   ├── usage.go          # 用量统计
 │   │   ├── im_connector.go   # IM 连接器
 │   │   ├── scheduled.go      # 定时任务 CRUD
 │   │   ├── auth.go           # SSO 登录（OAuth code 换 token + 游客登录）
-│   │   ├── nexus.go          # Nexus 对外 API + 设置 + WAN API + TokenAuth 中间件
-│   │   ├── nexus_contact.go  # 建联管理（请求/响应/列表/删除，支持 LAN/WAN）
+│   │   ├── nexus.go          # Nexus 对外 API + 设置 + WAN API
 │   │   ├── a2a_conversation.go # A2A 对话管理（发起/接受/拒绝/暂停/接管/终止/审批）
 │   │   ├── agent_nexus_config.go # Agent 对外设置 CRUD
+│   │   ├── evolution.go      # 自我进化引擎 + API（分析/提取/日志）
+│   │   ├── backup.go         # 数据库备份（VACUUM INTO + 导出）
+│   │   ├── health.go         # 结构化健康检查
+│   │   ├── middleware.go     # CORS + Body Size + Rate Limiter
 │   │   ├── memory.go         # 长期记忆 CRUD + 消息固定
 │   │   ├── transcribe.go     # 语音识别（本地 whisper.cpp 优先，回退远端 API）
 │   │   └── ws_hub.go         # WebSocket Hub
@@ -85,7 +98,9 @@ lingxi-agent/
 │   │   ├── main.jsx          # 入口
 │   │   ├── index.css         # Tailwind + 主题 CSS 变量
 │   │   ├── api/client.js     # fetch 封装
-│   │   ├── state/useStore.js # Zustand store
+│   │   ├── state/
+│   │   │   ├── useStore.js   # Zustand store（组合多切片）
+│   │   │   └── slices/       # authSlice/uiSlice/sessionSlice/chatSlice/nexusSlice
 │   │   ├── ui/               # 通用 UI
 │   │   │   ├── AppShell.jsx  # 主布局（顶部导航+侧边栏+主区域+AnimatePresence）
 │   │   │   ├── primitives.jsx # 原子组件（Button/Card/Modal/Badge/Input...）
@@ -196,11 +211,13 @@ dist-electron/
 ### 必须遵守
 
 1. **不允许开启子代理** — 所有开发任务在当前会话中直接完成
-2. **每次开发完成后** 必须执行：
-   - 打包（`./build-desktop.sh`）
-   - 更新 `.cursor/rules/lingxi-agent.mdc`（如有架构/规范变更）
-   - 更新 `CLAUDE.md`（如有新模块/技术栈/流程变更）
-   - 更新 `README.md`（如有用户可见的新功能/快捷键/配置）
+2. **每次开发完成后必须执行以下全部步骤（强制，不可跳过）：**
+   1. 更新 `.cursor/rules/lingxi-agent.mdc`（如有架构/规范变更）
+   2. 更新 `CLAUDE.md`（如有新模块/技术栈/流程变更）
+   3. 更新 `README.md`（如有用户可见的新功能/快捷键/配置）
+   4. **打包编译：`export PATH="/tmp/node22/bin:$PATH" && ./build-desktop.sh`**
+   5. **安装验证：打开 `dist-electron/mac-arm64/灵犀.app` 确认新功能可用**
+   ⚠️ 任何代码变更（无论大小）完成后都必须执行打包→安装，确保交付物始终可用。
 3. **信令服务器变更必须推送** — 凡对 `signaling-server/` 有代码变更，必须 push 到 `https://github.com/OdysseyFather/lingxi-singaling-server`（Render 自动部署）
 4. **前端样式只用 Tailwind CSS + CSS 变量**，不写独立 CSS 文件
 5. **组件必须使用 primitives.jsx 中的原子组件**（Button/Card/Modal 等）
@@ -321,6 +338,16 @@ dist-electron/
 | POST | /api/a2a-conversations/:id/reject-remote | RejectRemoteConversation | 拒绝远端对话 |
 | GET | /api/agents/:id/nexus-config | GetAgentNexusConfig | Agent 对外设置 |
 | PUT | /api/agents/:id/nexus-config | UpsertAgentNexusConfig | 更新对外设置 |
+| GET | /api/agents/:id/evolution | GetEvolutionConfig | 获取进化设置 |
+| PUT | /api/agents/:id/evolution | SetEvolutionConfig | 设置进化开关 |
+| GET | /api/agents/:id/evolution/logs | ListEvolutionLogs | 进化日志列表 |
+| DELETE | /api/agents/:id/evolution/logs | ClearEvolutionLogs | 清空进化日志 |
+| POST | /api/agents/:id/evolution/extract | ManualExtract | 手动提取知识 |
+| DELETE | /api/evolution/logs/:id | DeleteEvolutionLog | 删除单条进化日志 |
+| POST | /api/evolution/logs/:id/revert | RevertEvolutionLog | 撤销单条进化（恢复记忆/知识/技能） |
+| GET | /api/health | HealthCheck | 结构化健康检查 |
+| GET | /api/backup/export | ExportBackup | 导出数据库备份 |
+| POST | /api/skills/batch-export | BatchExportSkills | 批量导出技能 ZIP |
 
 ---
 
@@ -415,6 +442,7 @@ xattr -cr "/Applications/灵犀.app"
 - **支持 temperature、max_tokens 参数调整**
 - **支持 post_actions 后续动作（工作流链式执行数据模型）**
 - **Agent 对外设置（公开/能力标签/授权级别/禁止透露信息/知识库限定）**
+- **自我进化引擎（负面反馈/用户纠正/有价值对话/手动触发 → LLM 分析 → 自动写入记忆/知识库，含实时进度广播/撤销/进化日志审计）**
 - 模板市场（4 类 17 个模板：商业办公/技术开发/内容创意/生活效率）
 - 智能体绑定模型/技能/MCP/知识库
 
@@ -426,8 +454,8 @@ xattr -cr "/Applications/灵犀.app"
 ### 技能管理
 - **Smithery.ai 技能市场集成（搜索/分类/详情/安装）**
 - **在线查看/编辑技能文件（SKILL.md + 脚本）**
-- **技能导出为 ZIP 包**
-- **技能批量上传**
+- **技能导出为 ZIP 包（含 manifest.json 元数据）**
+- **技能批量上传 + 批量导出（多个技能打包为单个 ZIP）**
 - AI 生成技能 / ZIP 上传导入
 
 ### 知识库
@@ -508,3 +536,18 @@ xattr -cr "/Applications/灵犀.app"
 - **定时任务调度修复（Go 侧时间比较，15 秒检查间隔，时区兼容）**
 - **后台任务管理（GET /api/tasks、DELETE /api/tasks/:id）**
 - **挂起任务机制（Agent 向用户请求信息时挂起，前端提交后继续）**
+
+### 工程化改进
+- **结构化日志（log/slog JSON 格式，LOG_LEVEL 环境变量配置）**
+- **安全加固（WebSocket Origin 校验 + CORS + Body Size 限制 + Rate Limiter）**
+- **优雅关闭（os.Signal 捕获 + context.WithTimeout）**
+- **API 缓存（TTL 30s，ListProviders/ListAgents/ListSkills，变更自动失效）**
+- **SQLite 连接池（SetMaxOpenConns(4) + WAL 并发读）**
+- **数据库备份（每日 VACUUM INTO + 7 天自动清理 + /api/backup/export）**
+- **结构化健康检查（/api/health：db/goroutines/mem/uptime）**
+- **数据库迁移版本化（schema_version 表 + 编号迁移系统）**
+- **db 模块化拆分（session/knowledge/provider/usage/scheduled/auth/evolution）**
+- **前端 Zustand 切片化（auth/ui/session/chat/nexus 独立切片）**
+- **React.lazy 懒加载（非默认页按需加载）**
+- **Modal 焦点陷阱 + ARIA 无障碍**
+- **WS 流式 token 50ms 缓冲刷新（减少 React 重渲染）**

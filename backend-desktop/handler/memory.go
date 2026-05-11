@@ -1,7 +1,7 @@
 package handler
 
 import (
-	"log"
+	"log/slog"
 	"net/http"
 	"strconv"
 
@@ -20,7 +20,7 @@ func ListMemories(c *gin.Context) {
 		agentID,
 	)
 	if err != nil {
-		log.Printf("[memory] list error: %v", err)
+		slog.Warn("list error", "err", err)
 		c.Status(http.StatusInternalServerError)
 		return
 	}
@@ -57,7 +57,7 @@ func CreateMemory(c *gin.Context) {
 		body.AgentID, body.Content, body.Category,
 	)
 	if err != nil {
-		log.Printf("[memory] create error: %v", err)
+		slog.Warn("create error", "err", err)
 		c.Status(http.StatusInternalServerError)
 		return
 	}
@@ -73,7 +73,7 @@ func DeleteMemory(c *gin.Context) {
 		return
 	}
 	if _, err := db.DB.Exec(`DELETE FROM memories WHERE id=?`, id); err != nil {
-		log.Printf("[memory] delete error: %v", err)
+		slog.Warn("delete error", "err", err)
 		c.Status(http.StatusInternalServerError)
 		return
 	}
@@ -85,7 +85,7 @@ func ClearMemories(c *gin.Context) {
 	agentIDStr := c.DefaultQuery("agent_id", "0")
 	agentID, _ := strconv.ParseInt(agentIDStr, 10, 64)
 	if _, err := db.DB.Exec(`DELETE FROM memories WHERE agent_id=?`, agentID); err != nil {
-		log.Printf("[memory] clear error: %v", err)
+		slog.Warn("clear error", "err", err)
 		c.Status(http.StatusInternalServerError)
 		return
 	}
@@ -131,7 +131,7 @@ func ToggleMessagePin(c *gin.Context) {
 		pinnedInt = 1
 	}
 	if _, err := db.DB.Exec(`UPDATE messages SET pinned=? WHERE id=?`, pinnedInt, id); err != nil {
-		log.Printf("[memory] toggle pin error: %v", err)
+		slog.Warn("toggle pin error", "err", err)
 		c.Status(http.StatusInternalServerError)
 		return
 	}

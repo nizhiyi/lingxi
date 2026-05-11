@@ -3,7 +3,7 @@ package handler
 import (
 	"encoding/json"
 	"fmt"
-	"log"
+	"log/slog"
 	"net/http"
 	"strconv"
 
@@ -96,7 +96,7 @@ func CreateA2AConversation(c *gin.Context) {
 	}
 
 	if err != nil {
-		log.Printf("[nexus] send conversation invite failed: %v", err)
+		slog.Warn("send conversation invite failed", "err", err)
 		db.UpdateA2AConversationStatus(convID, "failed")
 		c.JSON(http.StatusBadGateway, gin.H{"error": "无法发送对话邀请: " + err.Error()})
 		return
@@ -196,7 +196,7 @@ func AcceptRemoteConversation(c *gin.Context) {
 	sessionTitle := fmt.Sprintf("[A2A] %s", conv.Topic)
 	sessionID, err := CreateA2ASession(sessionTitle, body.LocalAgentID)
 	if err != nil {
-		log.Printf("[nexus] create session for conv %d failed: %v", id, err)
+		slog.Warn("create session for conv  failed", "value", id, "err", err)
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "创建会话失败"})
 		return
 	}
@@ -267,12 +267,11 @@ func NexusReceiveConvAccept(c *gin.Context) {
 		return
 	}
 
-	log.Printf("[nexus] NexusReceiveConvAccept: convID=%d convUUID=%s remoteConvID=%d remoteAgent=%s",
-		body.ConvID, body.ConvUUID, body.RemoteConvID, body.RemoteAgentName)
+	slog.Info("NexusReceiveConvAccept", "convID", body.ConvID, "convUUID", body.ConvUUID, "remoteConvID", body.RemoteConvID, "remoteAgentName", body.RemoteAgentName)
 
 	conv, err := db.GetA2AConversation(body.ConvID)
 	if err != nil {
-		log.Printf("[nexus] NexusReceiveConvAccept: conv %d not found: %v", body.ConvID, err)
+		slog.Info("NexusReceiveConvAccept: conv  not found", "conv_i_d", body.ConvID, "err", err)
 		c.JSON(http.StatusNotFound, gin.H{"error": "conversation not found"})
 		return
 	}
@@ -281,7 +280,7 @@ func NexusReceiveConvAccept(c *gin.Context) {
 	sessionTitle := fmt.Sprintf("[A2A] %s", conv.Topic)
 	sessionID, err := CreateA2ASession(sessionTitle, conv.LocalAgentID)
 	if err != nil {
-		log.Printf("[nexus] create session for conv %d (initiator) failed: %v", body.ConvID, err)
+		slog.Warn("create session for conv  (initiator) failed", "conv_i_d", body.ConvID, "err", err)
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "创建会话失败"})
 		return
 	}
@@ -291,7 +290,7 @@ func NexusReceiveConvAccept(c *gin.Context) {
 
 	BroadcastWSEvent("a2a_status_change", fmt.Sprintf(`{"id":%d,"status":"active","session_id":%d}`, body.ConvID, sessionID))
 
-	log.Printf("[nexus] NexusReceiveConvAccept: starting RunConversation convID=%d sessionID=%d", body.ConvID, sessionID)
+	slog.Info("NexusReceiveConvAccept: starting RunConversation convID= sessionID", "conv_i_d", body.ConvID, "value", sessionID)
 	go nexus.RunConversation(body.ConvID, sessionID)
 
 	c.JSON(http.StatusOK, gin.H{"ok": true})
@@ -473,7 +472,7 @@ func NexusReceiveMessage(c *gin.Context) {
 		StructuredData  string `json:"structured_data"`
 	}
 	if err := c.ShouldBindJSON(&body); err != nil {
-		log.Printf("[nexus] NexusReceiveMessage: bind error: %v", err)
+		slog.Warn("NexusReceiveMessage: bind error", "err", err)
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
@@ -482,8 +481,7 @@ func NexusReceiveMessage(c *gin.Context) {
 	if len(contentPreview) > 200 {
 		contentPreview = contentPreview[:200] + "..."
 	}
-	log.Printf("[nexus] NexusReceiveMessage: convUUID=%s convID=%d sender=%s msgType=%s contentLen=%d",
-		body.ConvUUID, body.ConversationID, body.Sender, body.MsgType, len(body.Content))
+	slog.Info("NexusReceiveMessage", "convUUID", body.ConvUUID, "convID", body.ConversationID, "sender", body.Sender, "msgType", body.MsgType, "contentLen", len(body.Content))
 
 	// 通过 conv_uuid 或 remote_conv_id 查找本地对话
 	var localConvID int64
@@ -506,7 +504,7 @@ func NexusReceiveMessage(c *gin.Context) {
 	}
 
 	if localConvID == 0 {
-		log.Printf("[nexus] NexusReceiveMessage: WARNING - no local conversation found for convUUID=%s convID=%d", body.ConvUUID, body.ConversationID)
+		slog.Info("NexusReceiveMessage: WARNING - no local conversation found for convUUID= convID", "conv_u_u_i_d", body.ConvUUID, "conversation_i_d", body.ConversationID)
 		c.JSON(http.StatusNotFound, gin.H{"error": "conversation not found"})
 		return
 	}
@@ -524,7 +522,7 @@ func NexusReceiveMessage(c *gin.Context) {
 	}
 	msgID, err := db.CreateA2AMessage(msg)
 	if err != nil {
-		log.Printf("[nexus] NexusReceiveMessage: create message error: %v", err)
+		slog.Warn("NexusReceiveMessage: create message error", "err", err)
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
@@ -534,7 +532,7 @@ func NexusReceiveMessage(c *gin.Context) {
 	BroadcastWSEvent("a2a_message", string(payload))
 
 	if body.Sender == "remote" {
-		log.Printf("[nexus] NexusReceiveMessage: triggering HandleIncomingMessage for conv %d", localConvID)
+		slog.Info("NexusReceiveMessage: triggering HandleIncomingMessage for conv", "value", localConvID)
 		go nexus.HandleIncomingMessage(localConvID, body.Content)
 	}
 

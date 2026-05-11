@@ -276,6 +276,13 @@ const MD_COMPONENTS = {
   pre({ children }) {
     return <>{children}</>;
   },
+  table({ children, ...rest }) {
+    return (
+      <div className="md-table-wrap">
+        <table {...rest}>{children}</table>
+      </div>
+    );
+  },
 };
 
 // 从文本中提取交互式 JSON 块（choice / input）

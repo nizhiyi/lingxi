@@ -2,9 +2,8 @@ package db
 
 import (
 	"database/sql"
-	"log"
-	"strconv"
-	"time"
+	"log/slog"
+	"os"
 
 	"lingxi-agent/config"
 
@@ -20,17 +19,37 @@ func Init() {
 	var err error
 	DB, err = sql.Open("sqlite3", "file:"+cfg.DB.Path+"?_journal=WAL&_timeout=5000")
 	if err != nil {
-		log.Fatalf("[db] open error: %v", err)
+		slog.Error("db open error", "err", err)
+		os.Exit(1)
 	}
 
-	DB.SetMaxOpenConns(1)
+	DB.SetMaxOpenConns(4)
 
 	if err = DB.Ping(); err != nil {
-		log.Fatalf("[db] ping error: %v", err)
+		slog.Error("db ping error", "err", err)
+		os.Exit(1)
 	}
 
 	migrate()
-	log.Printf("[db] SQLite ready: %s", cfg.DB.Path)
+	slog.Info("SQLite ready", "path", cfg.DB.Path)
+}
+
+func ensureSchemaVersionTable() {
+	DB.Exec(`CREATE TABLE IF NOT EXISTS schema_version (
+		version    INTEGER PRIMARY KEY,
+		name       TEXT    NOT NULL DEFAULT '',
+		applied_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+	)`)
+}
+
+func currentSchemaVersion() int {
+	var v int
+	DB.QueryRow(`SELECT COALESCE(MAX(version), 0) FROM schema_version`).Scan(&v)
+	return v
+}
+
+func recordMigration(version int, name string) {
+	DB.Exec(`INSERT OR IGNORE INTO schema_version (version, name) VALUES (?, ?)`, version, name)
 }
 
 func migrate() {
@@ -184,7 +203,8 @@ func migrate() {
 	}
 	for _, s := range stmts {
 		if _, err := DB.Exec(s); err != nil {
-			log.Fatalf("[db] migrate error: %v\nSQL: %s", err, s)
+			slog.Error("db migrate error", "err", err, "sql", s)
+			os.Exit(1)
 		}
 	}
 
@@ -235,7 +255,7 @@ func migrate() {
 		`CREATE INDEX IF NOT EXISTS idx_sched_runs_task ON scheduled_task_runs(task_id)`,
 	} {
 		if _, err := DB.Exec(s); err != nil {
-			log.Printf("[db] scheduled_tasks migrate: %v", err)
+			slog.Warn("scheduled_tasks migrate", "err", err)
 		}
 	}
 
@@ -251,7 +271,7 @@ func migrate() {
 		`CREATE INDEX IF NOT EXISTS idx_memories_agent ON memories(agent_id)`,
 	} {
 		if _, err := DB.Exec(s); err != nil {
-			log.Printf("[db] memories migrate: %v", err)
+			slog.Warn("memories migrate", "err", err)
 		}
 	}
 
@@ -266,9 +286,27 @@ func migrate() {
 		)`,
 	} {
 		if _, err := DB.Exec(s); err != nil {
-			log.Printf("[db] knowledge_categories migrate: %v", err)
+			slog.Warn("knowledge_categories migrate", "err", err)
 		}
 	}
+	// ── 知识库向量嵌入分块表 ─────────────────────────────────────────
+	for _, s := range []string{
+		`CREATE TABLE IF NOT EXISTS kb_chunks (
+			id           INTEGER PRIMARY KEY AUTOINCREMENT,
+			knowledge_id INTEGER NOT NULL,
+			chunk_index  INTEGER NOT NULL DEFAULT 0,
+			content      TEXT    NOT NULL,
+			embedding    TEXT    NOT NULL DEFAULT '[]',
+			created_at   DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+			FOREIGN KEY (knowledge_id) REFERENCES knowledge(id) ON DELETE CASCADE
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_kb_chunks_kid ON kb_chunks(knowledge_id)`,
+	} {
+		if _, err := DB.Exec(s); err != nil {
+			slog.Warn("kb_chunks migrate", "err", err)
+		}
+	}
+
 	// 预置默认分类（仅在表为空时插入）
 	var catCount int
 	DB.QueryRow(`SELECT COUNT(1) FROM knowledge_categories`).Scan(&catCount)
@@ -376,7 +414,7 @@ func migrate() {
 		)`,
 	} {
 		if _, err := DB.Exec(s); err != nil {
-			log.Printf("[db] nexus migrate: %v", err)
+			slog.Warn("nexus migrate", "err", err)
 		}
 	}
 
@@ -409,7 +447,7 @@ func migrate() {
 		)`,
 	} {
 		if _, err := DB.Exec(s); err != nil {
-			log.Printf("[db] users migrate: %v", err)
+			slog.Warn("users migrate", "err", err)
 		}
 	}
 
@@ -425,6 +463,41 @@ func migrate() {
 
 	seedBuiltinProviders()
 	seedBuiltinAgent()
+
+	// ── 版本化迁移（增量 schema 变更在此追加）────────────────────────
+	ensureSchemaVersionTable()
+	v := currentSchemaVersion()
+
+	if v < 1 {
+		recordMigration(1, "baseline – all initial tables and columns")
+	}
+	if v < 2 {
+		for _, s := range []string{
+			`CREATE TABLE IF NOT EXISTS evolution_logs (
+				id          INTEGER PRIMARY KEY AUTOINCREMENT,
+				agent_id    INTEGER NOT NULL DEFAULT 0,
+				session_id  INTEGER NOT NULL DEFAULT 0,
+				trigger     TEXT    NOT NULL DEFAULT '',
+				action      TEXT    NOT NULL DEFAULT '',
+				target_type TEXT    NOT NULL DEFAULT '',
+				target_id   INTEGER NOT NULL DEFAULT 0,
+				summary     TEXT    NOT NULL DEFAULT '',
+				detail      TEXT    NOT NULL DEFAULT '{}',
+				created_at  DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+			)`,
+			`CREATE INDEX IF NOT EXISTS idx_evolution_logs_agent ON evolution_logs(agent_id)`,
+		} {
+			DB.Exec(s)
+		}
+		addColumnIfMissing("agents", "evolution_enabled", "INTEGER NOT NULL DEFAULT 0")
+		recordMigration(2, "self-evolution engine – evolution_logs table + agents.evolution_enabled")
+	}
+	if v < 3 {
+		addColumnIfMissing("evolution_logs", "status", "TEXT NOT NULL DEFAULT 'active'")
+		addColumnIfMissing("evolution_logs", "raw_llm_response", "TEXT NOT NULL DEFAULT ''")
+		addColumnIfMissing("evolution_logs", "steps_json", "TEXT NOT NULL DEFAULT '[]'")
+		recordMigration(3, "evolution_logs – status/raw_llm_response/steps_json columns for visibility and revert")
+	}
 }
 
 // seedBuiltinAgent 插入内置「通用助理」agent（id=1）
@@ -437,7 +510,7 @@ func seedBuiltinAgent() {
 	_, err := DB.Exec(`INSERT INTO agents (name, avatar, description, system_prompt, allow_all, builtin)
 		VALUES ('通用助理', '✦', '默认通用智能助理，开箱即用、无任何限制。', '', 1, 1)`)
 	if err != nil {
-		log.Printf("[db] seed builtin agent error: %v", err)
+		slog.Warn("seed builtin agent error", "err", err)
 	}
 }
 
@@ -445,7 +518,7 @@ func seedBuiltinAgent() {
 func addColumnIfMissing(table, column, def string) {
 	rows, err := DB.Query("PRAGMA table_info(" + table + ")")
 	if err != nil {
-		log.Printf("[db] PRAGMA error on %s: %v", table, err)
+		slog.Warn("PRAGMA error", "table", table, "err", err)
 		return
 	}
 	defer rows.Close()
@@ -462,7 +535,7 @@ func addColumnIfMissing(table, column, def string) {
 		}
 	}
 	if _, err := DB.Exec("ALTER TABLE " + table + " ADD COLUMN " + column + " " + def); err != nil {
-		log.Printf("[db] add column %s.%s error: %v", table, column, err)
+		slog.Warn("add column error", "table", table, "column", column, "err", err)
 	}
 }
 
@@ -578,1056 +651,10 @@ func seedBuiltinProviders() {
 				builtin=1
 		`, b.code, b.name, b.protocol, b.baseURL, b.model, b.meta, b.doc)
 		if err != nil {
-			log.Printf("[db] seed provider %s error: %v", b.code, err)
+			slog.Warn("seed provider error", "code", b.code, "err", err)
 		}
 	}
 }
 
-// ─── Tasks ───────────────────────────────────────────────────────
-
-func CreateTask(sessionID int64, title string) (int64, error) {
-	res, err := DB.Exec(
-		`INSERT INTO tasks (session_id, title) VALUES (?,?)`,
-		sessionID, title,
-	)
-	if err != nil {
-		return 0, err
-	}
-	return res.LastInsertId()
-}
-
-func UpdateTaskStatus(id int64, status string) {
-	DB.Exec(`UPDATE tasks SET status=?, updated_at=CURRENT_TIMESTAMP WHERE id=?`, status, id)
-}
-
-func UpdateTaskProgress(id int64, progress string) {
-	DB.Exec(`UPDATE tasks SET progress=?, updated_at=CURRENT_TIMESTAMP WHERE id=?`, progress, id)
-}
-
-func ListTasks(sessionID int64) ([]map[string]interface{}, error) {
-	var rows *sql.Rows
-	var err error
-	if sessionID > 0 {
-		rows, err = DB.Query(
-			`SELECT id, session_id, title, status, progress, created_at, updated_at
-			 FROM tasks WHERE session_id=? ORDER BY created_at DESC`,
-			sessionID,
-		)
-	} else {
-		rows, err = DB.Query(
-			`SELECT id, session_id, title, status, progress, created_at, updated_at
-			 FROM tasks ORDER BY created_at DESC LIMIT 50`,
-		)
-	}
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-
-	result := make([]map[string]interface{}, 0)
-	for rows.Next() {
-		var id, sid int64
-		var title, status, progress string
-		var createdAt, updatedAt time.Time
-		if err := rows.Scan(&id, &sid, &title, &status, &progress, &createdAt, &updatedAt); err != nil {
-			continue
-		}
-		result = append(result, map[string]interface{}{
-			"id":         id,
-			"session_id": sid,
-			"title":      title,
-			"status":     status,
-			"progress":   progress,
-			"created_at": createdAt,
-			"updated_at": updatedAt,
-		})
-	}
-	return result, nil
-}
-
-func DeleteTask(id int64) {
-	DB.Exec(`DELETE FROM tasks WHERE id=?`, id)
-}
-
-// ─── Pending Tasks ───────────────────────────────────────────────
-
-func SavePendingTask(sessionID int64, taskDesc, missingFields string) {
-	DB.Exec(`
-		INSERT INTO pending_tasks (session_id, task_desc, missing_fields)
-		VALUES (?,?,?)
-		ON CONFLICT(session_id) DO UPDATE SET
-			task_desc=excluded.task_desc,
-			missing_fields=excluded.missing_fields,
-			updated_at=CURRENT_TIMESTAMP
-	`, sessionID, taskDesc, missingFields)
-}
-
-func GetPendingTask(sessionID int64) (taskDesc, missingFields string, found bool) {
-	err := DB.QueryRow(
-		`SELECT task_desc, missing_fields FROM pending_tasks WHERE session_id=?`,
-		sessionID,
-	).Scan(&taskDesc, &missingFields)
-	if err != nil {
-		return "", "", false
-	}
-	return taskDesc, missingFields, true
-}
-
-func ClearPendingTask(sessionID int64) {
-	DB.Exec(`DELETE FROM pending_tasks WHERE session_id=?`, sessionID)
-}
-
-// ─── Knowledge ───────────────────────────────────────────────────
-
-func InsertKnowledge(title, filePath, category, tags, summary string, size int64) (int64, error) {
-	res, err := DB.Exec(
-		`INSERT INTO knowledge (title, file_path, category, tags, summary, size)
-		 VALUES (?,?,?,?,?,?)`,
-		title, filePath, category, tags, summary, size,
-	)
-	if err != nil {
-		return 0, err
-	}
-	return res.LastInsertId()
-}
-
-func ListKnowledge() ([]map[string]interface{}, error) {
-	rows, err := DB.Query(
-		`SELECT id, title, file_path, category, tags, summary, size, created_at
-		 FROM knowledge ORDER BY created_at DESC`,
-	)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-
-	result := make([]map[string]interface{}, 0)
-	for rows.Next() {
-		var id, size int64
-		var title, filePath, category, tags, summary string
-		var createdAt time.Time
-		if err := rows.Scan(&id, &title, &filePath, &category, &tags, &summary, &size, &createdAt); err != nil {
-			continue
-		}
-		result = append(result, map[string]interface{}{
-			"id":         id,
-			"title":      title,
-			"file_path":  filePath,
-			"category":   category,
-			"tags":       tags,
-			"summary":    summary,
-			"size":       size,
-			"created_at": createdAt,
-		})
-	}
-	return result, nil
-}
-
-func GetKnowledgeByID(id int64) (map[string]interface{}, error) {
-	var kbID, size int64
-	var title, filePath, category, tags, summary string
-	var createdAt time.Time
-	err := DB.QueryRow(
-		`SELECT id, title, file_path, category, tags, summary, size, created_at
-		 FROM knowledge WHERE id=?`, id,
-	).Scan(&kbID, &title, &filePath, &category, &tags, &summary, &size, &createdAt)
-	if err != nil {
-		return nil, err
-	}
-	return map[string]interface{}{
-		"id":         kbID,
-		"title":      title,
-		"file_path":  filePath,
-		"category":   category,
-		"tags":       tags,
-		"summary":    summary,
-		"size":       size,
-		"created_at": createdAt,
-	}, nil
-}
-
-func DeleteKnowledge(id int64) (string, error) {
-	var filePath string
-	err := DB.QueryRow(`SELECT file_path FROM knowledge WHERE id=?`, id).Scan(&filePath)
-	if err != nil {
-		return "", err
-	}
-	DB.Exec(`DELETE FROM knowledge WHERE id=?`, id)
-	return filePath, nil
-}
-
-func UpdateKnowledge(id int64, title, category, tags, summary string) error {
-	_, err := DB.Exec(`UPDATE knowledge SET title=?, category=?, tags=?, summary=?, updated_at=CURRENT_TIMESTAMP WHERE id=?`,
-		title, category, tags, summary, id)
-	return err
-}
-
-// ─── IM Connectors ───────────────────────────────────────────────
-
-type IMConnector struct {
-	ID        int64     `json:"id"`
-	Name      string    `json:"name"`
-	Platform  string    `json:"platform"`
-	AgentID   int64     `json:"agent_id"`
-	Enabled   bool      `json:"enabled"`
-	Config    string    `json:"config"`
-	CreatedAt time.Time `json:"created_at"`
-	UpdatedAt time.Time `json:"updated_at"`
-}
-
-func UpsertIMConnector(id int64, name, platform string, agentID int64, configJSON string) (int64, error) {
-	if id > 0 {
-		_, err := DB.Exec(`UPDATE im_connectors SET name=?, platform=?, agent_id=?, config=?, updated_at=CURRENT_TIMESTAMP WHERE id=?`,
-			name, platform, agentID, configJSON, id)
-		return id, err
-	}
-	res, err := DB.Exec(`INSERT INTO im_connectors (name, platform, agent_id, config) VALUES (?,?,?,?)`,
-		name, platform, agentID, configJSON)
-	if err != nil {
-		return 0, err
-	}
-	return res.LastInsertId()
-}
-
-func SetIMConnectorEnabled(id int64, enabled bool) error {
-	v := 0
-	if enabled {
-		v = 1
-	}
-	_, err := DB.Exec(`UPDATE im_connectors SET enabled=?, updated_at=CURRENT_TIMESTAMP WHERE id=?`, v, id)
-	return err
-}
-
-func ListIMConnectors() ([]IMConnector, error) {
-	rows, err := DB.Query(`SELECT id, name, platform, agent_id, enabled, config, created_at, updated_at FROM im_connectors ORDER BY platform, id`)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var result []IMConnector
-	for rows.Next() {
-		var c IMConnector
-		var enabled int
-		if err := rows.Scan(&c.ID, &c.Name, &c.Platform, &c.AgentID, &enabled, &c.Config, &c.CreatedAt, &c.UpdatedAt); err != nil {
-			continue
-		}
-		c.Enabled = enabled == 1
-		result = append(result, c)
-	}
-	return result, nil
-}
-
-func GetIMConnectorByID(id int64) (*IMConnector, error) {
-	var c IMConnector
-	var enabled int
-	err := DB.QueryRow(`SELECT id, name, platform, agent_id, enabled, config, created_at, updated_at FROM im_connectors WHERE id=?`, id).
-		Scan(&c.ID, &c.Name, &c.Platform, &c.AgentID, &enabled, &c.Config, &c.CreatedAt, &c.UpdatedAt)
-	if err != nil {
-		return nil, err
-	}
-	c.Enabled = enabled == 1
-	return &c, nil
-}
-
-func GetIMConnector(platform string) (*IMConnector, error) {
-	var c IMConnector
-	var enabled int
-	err := DB.QueryRow(`SELECT id, name, platform, agent_id, enabled, config, created_at, updated_at FROM im_connectors WHERE platform=? AND enabled=1 LIMIT 1`, platform).
-		Scan(&c.ID, &c.Name, &c.Platform, &c.AgentID, &enabled, &c.Config, &c.CreatedAt, &c.UpdatedAt)
-	if err != nil {
-		return nil, err
-	}
-	c.Enabled = enabled == 1
-	return &c, nil
-}
-
-func DeleteIMConnectorByID(id int64) error {
-	_, err := DB.Exec(`DELETE FROM im_connectors WHERE id=?`, id)
-	return err
-}
-
-func DeleteIMConnector(platform string) error {
-	_, err := DB.Exec(`DELETE FROM im_connectors WHERE platform=?`, platform)
-	return err
-}
-
-// ─── IM Sessions（群/用户 → session 映射）────────────────────────
-
-// GetOrCreateIMSession 根据 platform+scopeKey 查找有效 session。
-// ttlHours > 0 时，若 last_active 超过该时长则视为过期，自动创建新 session。
-// ttlHours == 0 表示永不过期。
-// title 用于新建 session 时的标题。
-func GetOrCreateIMSession(platform, scopeKey, title string, ttlHours int) (int64, error) {
-	var sessionID int64
-	var lastActive time.Time
-
-	err := DB.QueryRow(
-		`SELECT session_id, last_active FROM im_sessions WHERE platform=? AND scope_key=?`,
-		platform, scopeKey,
-	).Scan(&sessionID, &lastActive)
-
-	if err == nil {
-		// 找到记录，检查 TTL
-		expired := ttlHours > 0 && time.Since(lastActive) > time.Duration(ttlHours)*time.Hour
-		if !expired {
-			// 更新活跃时间
-			DB.Exec(`UPDATE im_sessions SET last_active=CURRENT_TIMESTAMP WHERE platform=? AND scope_key=?`, platform, scopeKey)
-			return sessionID, nil
-		}
-		// 已过期，创建新 session 替换旧的
-	}
-
-	// 新建 session
-	res, e := DB.Exec(`INSERT INTO sessions (title) VALUES (?)`, title)
-	if e != nil {
-		return 0, e
-	}
-	newSessionID, _ := res.LastInsertId()
-
-	_, e = DB.Exec(`
-		INSERT INTO im_sessions (platform, scope_key, session_id)
-		VALUES (?, ?, ?)
-		ON CONFLICT(platform, scope_key) DO UPDATE SET
-			session_id=excluded.session_id,
-			last_active=CURRENT_TIMESTAMP
-	`, platform, scopeKey, newSessionID)
-	if e != nil {
-		return 0, e
-	}
-	return newSessionID, nil
-}
-
-// TouchIMSession 更新 im_sessions 的 last_active（每次对话后调用）
-func TouchIMSession(platform, scopeKey string) {
-	DB.Exec(`UPDATE im_sessions SET last_active=CURRENT_TIMESTAMP WHERE platform=? AND scope_key=?`, platform, scopeKey)
-}
-
-// ─── Providers / API Profiles ────────────────────────────────────
-
-type Provider struct {
-	ID             int64  `json:"id"`
-	Code           string `json:"code"`
-	Name           string `json:"name"`
-	Protocol       string `json:"protocol"`
-	DefaultBaseURL string `json:"default_base_url"`
-	DefaultModel   string `json:"default_model"`
-	UsageAPIMeta   string `json:"usage_api_meta"`
-	DocURL         string `json:"doc_url"`
-	Builtin        bool   `json:"builtin"`
-}
-
-type APIProfile struct {
-	ID               int64     `json:"id"`
-	Name             string    `json:"name"`
-	ProviderID       int64     `json:"provider_id"`
-	ProviderCode     string    `json:"provider_code,omitempty"`
-	ProviderName     string    `json:"provider_name,omitempty"`
-	ProviderProtocol string    `json:"provider_protocol,omitempty"`
-	BaseURL          string    `json:"base_url"`
-	Model            string    `json:"model"`
-	AuthTokenCipher  string    `json:"auth_token_cipher,omitempty"` // 仅 Electron 启动时读取
-	AuthTokenMask    string    `json:"auth_token_mask"`
-	Extra            string    `json:"extra"`
-	Transformer      string    `json:"transformer"`
-	IsActive         bool      `json:"is_active"`
-	CreatedAt        time.Time `json:"created_at"`
-	UpdatedAt        time.Time `json:"updated_at"`
-}
-
-func ListProviders() ([]Provider, error) {
-	rows, err := DB.Query(`SELECT id, code, name, protocol, default_base_url, default_model, usage_api_meta, doc_url, builtin
-		FROM providers ORDER BY builtin DESC, id ASC`)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	out := make([]Provider, 0)
-	for rows.Next() {
-		var p Provider
-		var builtin int
-		if err := rows.Scan(&p.ID, &p.Code, &p.Name, &p.Protocol, &p.DefaultBaseURL, &p.DefaultModel, &p.UsageAPIMeta, &p.DocURL, &builtin); err != nil {
-			continue
-		}
-		p.Builtin = builtin == 1
-		out = append(out, p)
-	}
-	return out, nil
-}
-
-func GetProvider(id int64) (*Provider, error) {
-	var p Provider
-	var builtin int
-	err := DB.QueryRow(`SELECT id, code, name, protocol, default_base_url, default_model, usage_api_meta, doc_url, builtin
-		FROM providers WHERE id=?`, id).
-		Scan(&p.ID, &p.Code, &p.Name, &p.Protocol, &p.DefaultBaseURL, &p.DefaultModel, &p.UsageAPIMeta, &p.DocURL, &builtin)
-	if err != nil {
-		return nil, err
-	}
-	p.Builtin = builtin == 1
-	return &p, nil
-}
-
-func ListAPIProfiles(includeCipher bool) ([]APIProfile, error) {
-	rows, err := DB.Query(`
-		SELECT p.id, p.name, p.provider_id, COALESCE(pr.code,''), COALESCE(pr.name,''), COALESCE(pr.protocol,'anthropic'),
-		       p.base_url, p.model, p.auth_token_cipher, p.auth_token_mask, p.extra, p.transformer, p.is_active, p.created_at, p.updated_at
-		FROM api_profiles p LEFT JOIN providers pr ON pr.id=p.provider_id
-		ORDER BY p.is_active DESC, p.updated_at DESC`)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	out := make([]APIProfile, 0)
-	for rows.Next() {
-		var ap APIProfile
-		var active int
-		if err := rows.Scan(&ap.ID, &ap.Name, &ap.ProviderID, &ap.ProviderCode, &ap.ProviderName, &ap.ProviderProtocol,
-			&ap.BaseURL, &ap.Model, &ap.AuthTokenCipher, &ap.AuthTokenMask, &ap.Extra, &ap.Transformer, &active, &ap.CreatedAt, &ap.UpdatedAt); err != nil {
-			continue
-		}
-		ap.IsActive = active == 1
-		if !includeCipher {
-			ap.AuthTokenCipher = ""
-		}
-		out = append(out, ap)
-	}
-	return out, nil
-}
-
-func GetAPIProfile(id int64, includeCipher bool) (*APIProfile, error) {
-	var ap APIProfile
-	var active int
-	err := DB.QueryRow(`
-		SELECT p.id, p.name, p.provider_id, COALESCE(pr.code,''), COALESCE(pr.name,''), COALESCE(pr.protocol,'anthropic'),
-		       p.base_url, p.model, p.auth_token_cipher, p.auth_token_mask, p.extra, p.transformer, p.is_active, p.created_at, p.updated_at
-		FROM api_profiles p LEFT JOIN providers pr ON pr.id=p.provider_id
-		WHERE p.id=?`, id).
-		Scan(&ap.ID, &ap.Name, &ap.ProviderID, &ap.ProviderCode, &ap.ProviderName, &ap.ProviderProtocol,
-			&ap.BaseURL, &ap.Model, &ap.AuthTokenCipher, &ap.AuthTokenMask, &ap.Extra, &ap.Transformer, &active, &ap.CreatedAt, &ap.UpdatedAt)
-	if err != nil {
-		return nil, err
-	}
-	ap.IsActive = active == 1
-	if !includeCipher {
-		ap.AuthTokenCipher = ""
-	}
-	return &ap, nil
-}
-
-func GetActiveAPIProfile(includeCipher bool) (*APIProfile, error) {
-	var id int64
-	if err := DB.QueryRow(`SELECT id FROM api_profiles WHERE is_active=1 LIMIT 1`).Scan(&id); err != nil {
-		return nil, err
-	}
-	return GetAPIProfile(id, includeCipher)
-}
-
-func UpsertAPIProfile(ap *APIProfile) (int64, error) {
-	if ap.ID > 0 {
-		_, err := DB.Exec(`
-			UPDATE api_profiles SET
-				name=?, provider_id=?, base_url=?, model=?,
-				auth_token_cipher=?, auth_token_mask=?, extra=?, transformer=?, updated_at=CURRENT_TIMESTAMP
-			WHERE id=?`,
-			ap.Name, ap.ProviderID, ap.BaseURL, ap.Model,
-			ap.AuthTokenCipher, ap.AuthTokenMask, ap.Extra, ap.Transformer, ap.ID)
-		return ap.ID, err
-	}
-	res, err := DB.Exec(`
-		INSERT INTO api_profiles (name, provider_id, base_url, model, auth_token_cipher, auth_token_mask, extra, transformer)
-		VALUES (?,?,?,?,?,?,?,?)`,
-		ap.Name, ap.ProviderID, ap.BaseURL, ap.Model, ap.AuthTokenCipher, ap.AuthTokenMask, ap.Extra, ap.Transformer)
-	if err != nil {
-		return 0, err
-	}
-	return res.LastInsertId()
-}
-
-func DeleteAPIProfile(id int64) error {
-	_, err := DB.Exec(`DELETE FROM api_profiles WHERE id=?`, id)
-	return err
-}
-
-func ActivateAPIProfile(id int64) error {
-	tx, err := DB.Begin()
-	if err != nil {
-		return err
-	}
-	if _, err := tx.Exec(`UPDATE api_profiles SET is_active=0`); err != nil {
-		tx.Rollback()
-		return err
-	}
-	if _, err := tx.Exec(`UPDATE api_profiles SET is_active=1, updated_at=CURRENT_TIMESTAMP WHERE id=?`, id); err != nil {
-		tx.Rollback()
-		return err
-	}
-	return tx.Commit()
-}
-
-// ─── Usage ───────────────────────────────────────────────────────
-
-type UsageRecord struct {
-	ID               int64     `json:"id"`
-	SessionID        int64     `json:"session_id"`
-	MessageID        int64     `json:"message_id"`
-	ProfileID        int64     `json:"profile_id"`
-	Model            string    `json:"model"`
-	InputTokens      int64     `json:"input_tokens"`
-	OutputTokens     int64     `json:"output_tokens"`
-	CacheReadTokens  int64     `json:"cache_read_tokens"`
-	CacheWriteTokens int64     `json:"cache_write_tokens"`
-	CostUSD          float64   `json:"cost_usd"`
-	Estimated        bool      `json:"estimated"`
-	DurationMs       int64     `json:"duration_ms"`
-	CreatedAt        time.Time `json:"created_at"`
-}
-
-func InsertUsageRecord(r *UsageRecord) (int64, error) {
-	est := 0
-	if r.Estimated {
-		est = 1
-	}
-	res, err := DB.Exec(`
-		INSERT INTO usage_records
-			(session_id, message_id, profile_id, model,
-			 input_tokens, output_tokens, cache_read_tokens, cache_write_tokens,
-			 cost_usd, estimated, duration_ms)
-		VALUES (?,?,?,?,?,?,?,?,?,?,?)`,
-		r.SessionID, r.MessageID, r.ProfileID, r.Model,
-		r.InputTokens, r.OutputTokens, r.CacheReadTokens, r.CacheWriteTokens,
-		r.CostUSD, est, r.DurationMs)
-	if err != nil {
-		return 0, err
-	}
-	return res.LastInsertId()
-}
-
-// SumUsage 汇总指定时间范围内的用量
-type UsageSummary struct {
-	InputTokens      int64   `json:"input_tokens"`
-	OutputTokens     int64   `json:"output_tokens"`
-	CacheReadTokens  int64   `json:"cache_read_tokens"`
-	CacheWriteTokens int64   `json:"cache_write_tokens"`
-	CostUSD          float64 `json:"cost_usd"`
-	Requests         int64   `json:"requests"`
-}
-
-func SumUsageSince(since time.Time) (UsageSummary, error) {
-	var s UsageSummary
-	row := DB.QueryRow(`
-		SELECT COALESCE(SUM(input_tokens),0), COALESCE(SUM(output_tokens),0),
-		       COALESCE(SUM(cache_read_tokens),0), COALESCE(SUM(cache_write_tokens),0),
-		       COALESCE(SUM(cost_usd),0), COUNT(1)
-		FROM usage_records WHERE created_at >= ?`, since)
-	err := row.Scan(&s.InputTokens, &s.OutputTokens, &s.CacheReadTokens, &s.CacheWriteTokens, &s.CostUSD, &s.Requests)
-	return s, err
-}
-
-// GroupUsageByDay 返回 [{date, in, out, cost}] 升序，最近 days 天
-func GroupUsageByDay(days int) ([]map[string]interface{}, error) {
-	rows, err := DB.Query(`
-		SELECT date(created_at) AS d,
-		       COALESCE(SUM(input_tokens),0), COALESCE(SUM(output_tokens),0),
-		       COALESCE(SUM(cache_read_tokens),0), COALESCE(SUM(cache_write_tokens),0),
-		       COALESCE(SUM(cost_usd),0), COUNT(1)
-		FROM usage_records
-		WHERE created_at >= datetime('now', ?)
-		GROUP BY d ORDER BY d ASC`, "-"+strconv.Itoa(days)+" days")
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	out := make([]map[string]interface{}, 0)
-	for rows.Next() {
-		var d string
-		var in, outT, cr, cw, n int64
-		var cost float64
-		if err := rows.Scan(&d, &in, &outT, &cr, &cw, &cost, &n); err != nil {
-			continue
-		}
-		out = append(out, map[string]interface{}{
-			"date": d, "input_tokens": in, "output_tokens": outT,
-			"cache_read_tokens": cr, "cache_write_tokens": cw,
-			"cost_usd": cost, "requests": n,
-		})
-	}
-	return out, nil
-}
-
-// GroupUsageByModel 按模型聚合
-func GroupUsageByModel(days int) ([]map[string]interface{}, error) {
-	rows, err := DB.Query(`
-		SELECT model,
-		       COALESCE(SUM(input_tokens),0), COALESCE(SUM(output_tokens),0),
-		       COALESCE(SUM(cost_usd),0), COUNT(1)
-		FROM usage_records
-		WHERE created_at >= datetime('now', ?)
-		GROUP BY model ORDER BY 4 DESC`, "-"+strconv.Itoa(days)+" days")
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	out := make([]map[string]interface{}, 0)
-	for rows.Next() {
-		var model string
-		var in, outT, n int64
-		var cost float64
-		if err := rows.Scan(&model, &in, &outT, &cost, &n); err != nil {
-			continue
-		}
-		out = append(out, map[string]interface{}{
-			"model": model, "input_tokens": in, "output_tokens": outT,
-			"cost_usd": cost, "requests": n,
-		})
-	}
-	return out, nil
-}
-
-func ListRecentUsage(limit int) ([]map[string]interface{}, error) {
-	if limit <= 0 || limit > 500 {
-		limit = 100
-	}
-	rows, err := DB.Query(`
-		SELECT u.id, u.session_id, COALESCE(s.title,''), u.model, u.input_tokens, u.output_tokens,
-		       u.cache_read_tokens, u.cache_write_tokens, u.cost_usd, u.estimated, u.duration_ms, u.created_at
-		FROM usage_records u LEFT JOIN sessions s ON s.id=u.session_id
-		ORDER BY u.id DESC LIMIT ?`, limit)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	out := make([]map[string]interface{}, 0)
-	for rows.Next() {
-		var id, sid, in, outT, cr, cw, est, dur int64
-		var title, model string
-		var cost float64
-		var createdAt time.Time
-		if err := rows.Scan(&id, &sid, &title, &model, &in, &outT, &cr, &cw, &cost, &est, &dur, &createdAt); err != nil {
-			continue
-		}
-		rec := map[string]interface{}{
-			"id": id, "session_id": sid, "session_title": title,
-			"model": model, "input_tokens": in, "output_tokens": outT,
-			"cache_read_tokens": cr, "cache_write_tokens": cw,
-			"cost_usd": cost, "duration_ms": dur, "created_at": createdAt,
-		}
-		if est == 1 {
-			rec["estimated"] = true
-		}
-		out = append(out, rec)
-	}
-	return out, nil
-}
-
-func SaveUsageQuotaSnapshot(profileID int64, snapshot string) {
-	DB.Exec(`
-		INSERT INTO usage_quota_cache (profile_id, snapshot)
-		VALUES (?, ?)
-		ON CONFLICT(profile_id) DO UPDATE SET
-			snapshot=excluded.snapshot,
-			fetched_at=CURRENT_TIMESTAMP`, profileID, snapshot)
-}
-
-func GetUsageQuotaCache(profileID int64) (string, time.Time, bool) {
-	var snap string
-	var t time.Time
-	err := DB.QueryRow(`SELECT snapshot, fetched_at FROM usage_quota_cache WHERE profile_id=?`, profileID).Scan(&snap, &t)
-	if err != nil {
-		return "", time.Time{}, false
-	}
-	return snap, t, true
-}
-
-// ─── Scheduled Tasks ─────────────────────────────────────────────
-
-type ScheduledTask struct {
-	ID            int64      `json:"id"`
-	Name          string     `json:"name"`
-	Prompt        string     `json:"prompt"`
-	AgentID       int64      `json:"agent_id"`
-	CronExpr      string     `json:"cron_expr"`
-	Stateful      bool       `json:"stateful"`
-	SessionID     *int64     `json:"session_id"`
-	NotifyDesktop bool       `json:"notify_desktop"`
-	Enabled       bool       `json:"enabled"`
-	LastRunAt     *time.Time `json:"last_run_at"`
-	NextRunAt     *time.Time `json:"next_run_at"`
-	RunCount      int        `json:"run_count"`
-	CreatedAt     time.Time  `json:"created_at"`
-	UpdatedAt     time.Time  `json:"updated_at"`
-}
-
-type ScheduledTaskRun struct {
-	ID         int64      `json:"id"`
-	TaskID     int64      `json:"task_id"`
-	SessionID  int64      `json:"session_id"`
-	Status     string     `json:"status"`
-	Summary    string     `json:"summary"`
-	StartedAt  time.Time  `json:"started_at"`
-	FinishedAt *time.Time `json:"finished_at"`
-}
-
-func scanScheduledTask(scanner interface{ Scan(...interface{}) error }) (*ScheduledTask, error) {
-	var t ScheduledTask
-	var stateful, notify, enabled int
-	var sessionID sql.NullInt64
-	var lastRun, nextRun sql.NullTime
-	err := scanner.Scan(&t.ID, &t.Name, &t.Prompt, &t.AgentID, &t.CronExpr,
-		&stateful, &sessionID, &notify, &enabled,
-		&lastRun, &nextRun, &t.RunCount, &t.CreatedAt, &t.UpdatedAt)
-	if err != nil {
-		return nil, err
-	}
-	t.Stateful = stateful == 1
-	t.NotifyDesktop = notify == 1
-	t.Enabled = enabled == 1
-	if sessionID.Valid {
-		v := sessionID.Int64
-		t.SessionID = &v
-	}
-	if lastRun.Valid {
-		t.LastRunAt = &lastRun.Time
-	}
-	if nextRun.Valid {
-		t.NextRunAt = &nextRun.Time
-	}
-	return &t, nil
-}
-
-const schedCols = `id, name, prompt, agent_id, cron_expr, stateful, session_id,
-	notify_desktop, enabled, last_run_at, next_run_at, run_count, created_at, updated_at`
-
-func ListScheduledTasks() ([]ScheduledTask, error) {
-	rows, err := DB.Query(`SELECT ` + schedCols + ` FROM scheduled_tasks ORDER BY created_at DESC`)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	out := make([]ScheduledTask, 0)
-	for rows.Next() {
-		t, err := scanScheduledTask(rows)
-		if err != nil {
-			continue
-		}
-		out = append(out, *t)
-	}
-	return out, nil
-}
-
-func GetScheduledTask(id int64) (*ScheduledTask, error) {
-	return scanScheduledTask(DB.QueryRow(`SELECT `+schedCols+` FROM scheduled_tasks WHERE id=?`, id))
-}
-
-// fmtTimeForSQLite 将 time.Time 格式化为 SQLite 兼容的字符串（本地时间，无时区后缀）
-func fmtTimeForSQLite(t *time.Time) interface{} {
-	if t == nil {
-		return nil
-	}
-	return t.Local().Format("2006-01-02 15:04:05")
-}
-
-func CreateScheduledTask(t *ScheduledTask) (int64, error) {
-	stateful, notify, enabled := 0, 1, 1
-	if t.Stateful {
-		stateful = 1
-	}
-	if !t.NotifyDesktop {
-		notify = 0
-	}
-	if !t.Enabled {
-		enabled = 0
-	}
-	res, err := DB.Exec(`INSERT INTO scheduled_tasks
-		(name, prompt, agent_id, cron_expr, stateful, notify_desktop, enabled, next_run_at)
-		VALUES (?,?,?,?,?,?,?,?)`,
-		t.Name, t.Prompt, t.AgentID, t.CronExpr, stateful, notify, enabled, fmtTimeForSQLite(t.NextRunAt))
-	if err != nil {
-		return 0, err
-	}
-	return res.LastInsertId()
-}
-
-func UpdateScheduledTask(t *ScheduledTask) error {
-	stateful, notify, enabled := 0, 1, 1
-	if t.Stateful {
-		stateful = 1
-	}
-	if !t.NotifyDesktop {
-		notify = 0
-	}
-	if !t.Enabled {
-		enabled = 0
-	}
-	_, err := DB.Exec(`UPDATE scheduled_tasks SET
-		name=?, prompt=?, agent_id=?, cron_expr=?, stateful=?,
-		notify_desktop=?, enabled=?, next_run_at=?, updated_at=CURRENT_TIMESTAMP
-		WHERE id=?`,
-		t.Name, t.Prompt, t.AgentID, t.CronExpr, stateful,
-		notify, enabled, fmtTimeForSQLite(t.NextRunAt), t.ID)
-	return err
-}
-
-func DeleteScheduledTask(id int64) error {
-	DB.Exec(`DELETE FROM scheduled_task_runs WHERE task_id=?`, id)
-	_, err := DB.Exec(`DELETE FROM scheduled_tasks WHERE id=?`, id)
-	return err
-}
-
-func ToggleScheduledTask(id int64, enabled bool) error {
-	v := 0
-	if enabled {
-		v = 1
-	}
-	_, err := DB.Exec(`UPDATE scheduled_tasks SET enabled=?, updated_at=CURRENT_TIMESTAMP WHERE id=?`, v, id)
-	return err
-}
-
-func UpdateScheduledTaskAfterRun(id int64, nextRunAt *time.Time) {
-	DB.Exec(`UPDATE scheduled_tasks SET
-		last_run_at=CURRENT_TIMESTAMP, next_run_at=?, run_count=run_count+1, updated_at=CURRENT_TIMESTAMP
-		WHERE id=?`, fmtTimeForSQLite(nextRunAt), id)
-}
-
-func SetScheduledTaskSession(id, sessionID int64) {
-	DB.Exec(`UPDATE scheduled_tasks SET session_id=?, updated_at=CURRENT_TIMESTAMP WHERE id=?`, sessionID, id)
-}
-
-func GetDueScheduledTasks() ([]ScheduledTask, error) {
-	rows, err := DB.Query(`SELECT ` + schedCols + ` FROM scheduled_tasks
-		WHERE enabled=1 AND next_run_at IS NOT NULL
-		ORDER BY next_run_at ASC`)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	now := time.Now()
-	out := make([]ScheduledTask, 0)
-	for rows.Next() {
-		t, err := scanScheduledTask(rows)
-		if err != nil {
-			continue
-		}
-		if t.NextRunAt != nil && !t.NextRunAt.After(now) {
-			out = append(out, *t)
-		}
-	}
-	return out, nil
-}
-
-// ─── Scheduled Task Runs ─────────────────────────────────────────
-
-func CreateScheduledTaskRun(taskID, sessionID int64) (int64, error) {
-	res, err := DB.Exec(`INSERT INTO scheduled_task_runs (task_id, session_id) VALUES (?,?)`, taskID, sessionID)
-	if err != nil {
-		return 0, err
-	}
-	return res.LastInsertId()
-}
-
-func FinishScheduledTaskRun(id int64, status, summary string) {
-	DB.Exec(`UPDATE scheduled_task_runs SET status=?, summary=?, finished_at=CURRENT_TIMESTAMP WHERE id=?`,
-		status, summary, id)
-}
-
-func ListScheduledTaskRuns(taskID int64, limit int) ([]ScheduledTaskRun, error) {
-	if limit <= 0 || limit > 200 {
-		limit = 50
-	}
-	rows, err := DB.Query(`SELECT id, task_id, session_id, status, summary, started_at, finished_at
-		FROM scheduled_task_runs WHERE task_id=? ORDER BY started_at DESC LIMIT ?`, taskID, limit)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	out := make([]ScheduledTaskRun, 0)
-	for rows.Next() {
-		var r ScheduledTaskRun
-		var fin sql.NullTime
-		if err := rows.Scan(&r.ID, &r.TaskID, &r.SessionID, &r.Status, &r.Summary, &r.StartedAt, &fin); err != nil {
-			continue
-		}
-		if fin.Valid {
-			r.FinishedAt = &fin.Time
-		}
-		out = append(out, r)
-	}
-	return out, nil
-}
-
-// ─── Knowledge Categories ────────────────────────────────────────
-
-type KnowledgeCategory struct {
-	ID        int64  `json:"id"`
-	Name      string `json:"name"`
-	Icon      string `json:"icon"`
-	SortOrder int    `json:"sort_order"`
-}
-
-func ListKnowledgeCategories() ([]KnowledgeCategory, error) {
-	rows, err := DB.Query(`SELECT id, name, icon, sort_order FROM knowledge_categories ORDER BY sort_order ASC, id ASC`)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	out := make([]KnowledgeCategory, 0)
-	for rows.Next() {
-		var c KnowledgeCategory
-		if err := rows.Scan(&c.ID, &c.Name, &c.Icon, &c.SortOrder); err != nil {
-			continue
-		}
-		out = append(out, c)
-	}
-	return out, nil
-}
-
-func CreateKnowledgeCategory(name, icon string) (int64, error) {
-	var maxOrder int
-	DB.QueryRow(`SELECT COALESCE(MAX(sort_order),0) FROM knowledge_categories`).Scan(&maxOrder)
-	res, err := DB.Exec(`INSERT INTO knowledge_categories (name, icon, sort_order) VALUES (?,?,?)`, name, icon, maxOrder+1)
-	if err != nil {
-		return 0, err
-	}
-	return res.LastInsertId()
-}
-
-func DeleteKnowledgeCategory(id int64) error {
-	_, err := DB.Exec(`DELETE FROM knowledge_categories WHERE id=?`, id)
-	return err
-}
-
-func UpdateKnowledgeCategory(id int64, name, icon string) error {
-	_, err := DB.Exec(`UPDATE knowledge_categories SET name=?, icon=? WHERE id=?`, name, icon, id)
-	return err
-}
-
-func UpdateKnowledgeItemCategory(id int64, category string) error {
-	_, err := DB.Exec(`UPDATE knowledge SET category=? WHERE id=?`, category, id)
-	return err
-}
-
-// ─── Users ───────────────────────────────────────────────────────
-
-type User struct {
-	ID         int64     `json:"id"`
-	Provider   string    `json:"provider"`
-	ProviderID string    `json:"provider_id"`
-	Nickname   string    `json:"nickname"`
-	AvatarURL  string    `json:"avatar_url"`
-	Email      string    `json:"email"`
-	CreatedAt  time.Time `json:"created_at"`
-	UpdatedAt  time.Time `json:"updated_at"`
-}
-
-func CreateUser(u *User) (int64, error) {
-	res, err := DB.Exec(`INSERT INTO users (provider, provider_id, nickname, avatar_url, email)
-		VALUES (?,?,?,?,?)`, u.Provider, u.ProviderID, u.Nickname, u.AvatarURL, u.Email)
-	if err != nil {
-		return 0, err
-	}
-	return res.LastInsertId()
-}
-
-func GetCurrentUser() (*User, error) {
-	var u User
-	err := DB.QueryRow(`SELECT id, provider, provider_id, nickname, avatar_url, email, created_at, updated_at
-		FROM users ORDER BY id DESC LIMIT 1`).
-		Scan(&u.ID, &u.Provider, &u.ProviderID, &u.Nickname, &u.AvatarURL, &u.Email, &u.CreatedAt, &u.UpdatedAt)
-	if err != nil {
-		return nil, err
-	}
-	return &u, nil
-}
-
-func GetUserByProviderID(provider, providerID string) (*User, error) {
-	var u User
-	err := DB.QueryRow(`SELECT id, provider, provider_id, nickname, avatar_url, email, created_at, updated_at
-		FROM users WHERE provider=? AND provider_id=?`, provider, providerID).
-		Scan(&u.ID, &u.Provider, &u.ProviderID, &u.Nickname, &u.AvatarURL, &u.Email, &u.CreatedAt, &u.UpdatedAt)
-	if err != nil {
-		return nil, err
-	}
-	return &u, nil
-}
-
-func UpdateUser(id int64, nickname, avatarURL, email string) error {
-	_, err := DB.Exec(`UPDATE users SET nickname=?, avatar_url=?, email=?, updated_at=CURRENT_TIMESTAMP WHERE id=?`,
-		nickname, avatarURL, email, id)
-	return err
-}
-
-func HasAnyUser() bool {
-	var cnt int
-	DB.QueryRow(`SELECT COUNT(1) FROM users`).Scan(&cnt)
-	return cnt > 0
-}
-
-func DeleteAllUsers() error {
-	_, err := DB.Exec(`DELETE FROM users`)
-	return err
-}
-
-// ─── OAuth Configs ──────────────────────────────────────────────
-
-type OAuthConfig struct {
-	ID        int64  `json:"id"`
-	Provider  string `json:"provider"`
-	AppID     string `json:"app_id"`
-	AppSecret string `json:"app_secret"`
-	Extra     string `json:"extra"`
-}
-
-func GetOAuthConfig(provider string) (*OAuthConfig, error) {
-	var c OAuthConfig
-	err := DB.QueryRow(`SELECT id, provider, app_id, app_secret, extra FROM oauth_configs WHERE provider=?`, provider).
-		Scan(&c.ID, &c.Provider, &c.AppID, &c.AppSecret, &c.Extra)
-	if err != nil {
-		return nil, err
-	}
-	return &c, nil
-}
-
-func UpsertOAuthConfig(c *OAuthConfig) error {
-	_, err := DB.Exec(`
-		INSERT INTO oauth_configs (provider, app_id, app_secret, extra)
-		VALUES (?,?,?,?)
-		ON CONFLICT(provider) DO UPDATE SET
-			app_id=excluded.app_id,
-			app_secret=excluded.app_secret,
-			extra=excluded.extra,
-			updated_at=CURRENT_TIMESTAMP
-	`, c.Provider, c.AppID, c.AppSecret, c.Extra)
-	return err
-}
-
-func ListOAuthConfigs() ([]OAuthConfig, error) {
-	rows, err := DB.Query(`SELECT id, provider, app_id, app_secret, extra FROM oauth_configs ORDER BY provider`)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var out []OAuthConfig
-	for rows.Next() {
-		var c OAuthConfig
-		if err := rows.Scan(&c.ID, &c.Provider, &c.AppID, &c.AppSecret, &c.Extra); err != nil {
-			continue
-		}
-		out = append(out, c)
-	}
-	return out, nil
-}
-
-// SeedDingTalkOAuth 确保钉钉 OAuth 配置存在（仅在无记录时插入）
-func SeedDingTalkOAuth(clientID, clientSecret string) {
-	var cnt int
-	DB.QueryRow(`SELECT COUNT(1) FROM oauth_configs WHERE provider='dingtalk'`).Scan(&cnt)
-	if cnt > 0 {
-		return
-	}
-	UpsertOAuthConfig(&OAuthConfig{
-		Provider:  "dingtalk",
-		AppID:     clientID,
-		AppSecret: clientSecret,
-		Extra:     "{}",
-	})
-	log.Printf("[db] seeded DingTalk OAuth config")
-}
+// Domain CRUD functions are in separate files:
+// session.go, knowledge.go, im_connector.go, provider.go, usage.go, scheduled.go, auth.go, nexus.go

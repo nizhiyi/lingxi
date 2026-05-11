@@ -2,9 +2,11 @@ package handler
 
 import (
 	"database/sql"
-	"log"
+	"fmt"
+	"log/slog"
 	"net/http"
 	"strconv"
+	"strings"
 
 	"github.com/gin-gonic/gin"
 	"lingxi-agent/db"
@@ -31,7 +33,7 @@ func ListSessions(c *gin.Context) {
 		`)
 	}
 	if err != nil {
-		log.Printf("[session] list error: %v", err)
+		slog.Warn("list error", "err", err)
 		c.Status(http.StatusInternalServerError)
 		return
 	}
@@ -61,7 +63,7 @@ func CreateSession(c *gin.Context) {
 
 	res, err := db.DB.Exec(`INSERT INTO sessions (title, agent_id) VALUES (?,?)`, body.Title, body.AgentID)
 	if err != nil {
-		log.Printf("[session] create error: %v", err)
+		slog.Warn("create error", "err", err)
 		c.Status(http.StatusInternalServerError)
 		return
 	}
@@ -118,7 +120,7 @@ func DeleteSession(c *gin.Context) {
 	db.DB.Exec(`DELETE FROM messages WHERE session_id=?`, sessionID)
 	res, err := db.DB.Exec(`DELETE FROM sessions WHERE id=?`, sessionID)
 	if err != nil {
-		log.Printf("[session] delete error: %v", err)
+		slog.Warn("delete error", "err", err)
 		c.Status(http.StatusInternalServerError)
 		return
 	}
@@ -206,7 +208,7 @@ func SearchMessages(c *gin.Context) {
 		LIMIT 50
 	`, q)
 	if err != nil {
-		log.Printf("[search] query error: %v", err)
+		slog.Warn("query error", "err", err)
 		c.Status(http.StatusInternalServerError)
 		return
 	}
@@ -299,6 +301,20 @@ func SetMessageFeedback(c *gin.Context) {
 		c.Status(http.StatusNotFound)
 		return
 	}
+
+	if body.Feedback == "down" {
+		var sessionID, agentID int64
+		var content string
+		db.DB.QueryRow(`SELECT session_id, content FROM messages WHERE id=?`, msgID).Scan(&sessionID, &content)
+		if sessionID > 0 {
+			db.DB.QueryRow(`SELECT agent_id FROM sessions WHERE id=?`, sessionID).Scan(&agentID)
+			if agentID > 0 {
+				ctx := buildConversationContext(sessionID, msgID)
+				TryAutoEvolution(agentID, sessionID, ctx)
+			}
+		}
+	}
+
 	c.JSON(http.StatusOK, gin.H{"ok": true})
 }
 
@@ -315,7 +331,7 @@ func saveClaudeSessionID(sessionID int64, claudeID string) {
 func appendMessage(sessionID int64, role, content string) {
 	_, err := db.DB.Exec(`INSERT INTO messages (session_id, role, content) VALUES (?,?,?)`, sessionID, role, content)
 	if err != nil {
-		log.Printf("[msg] insert error: %v", err)
+		slog.Warn("insert error", "err", err)
 		return
 	}
 	_, _ = db.DB.Exec(`UPDATE sessions SET message_count=message_count+1, updated_at=CURRENT_TIMESTAMP WHERE id=?`, sessionID)
@@ -326,7 +342,7 @@ func appendMessageWithUsage(sessionID int64, role, content, usageJSON string) in
 	res, err := db.DB.Exec(`INSERT INTO messages (session_id, role, content, usage) VALUES (?,?,?,?)`,
 		sessionID, role, content, usageJSON)
 	if err != nil {
-		log.Printf("[msg] insert error: %v", err)
+		slog.Warn("insert error", "err", err)
 		return 0
 	}
 	id, _ := res.LastInsertId()
@@ -376,4 +392,31 @@ func ClearPendingTask(c *gin.Context) {
 	}
 	db.ClearPendingTask(sessionID)
 	c.Status(http.StatusOK)
+}
+
+func buildConversationContext(sessionID, aroundMsgID int64) string {
+	var rows *sql.Rows
+	var err error
+	if aroundMsgID > 0 {
+		rows, err = db.DB.Query(
+			`SELECT role, content FROM messages WHERE session_id=? AND id >= ? - 5 AND id <= ? + 1 ORDER BY id`,
+			sessionID, aroundMsgID, aroundMsgID,
+		)
+	} else {
+		rows, err = db.DB.Query(
+			`SELECT role, content FROM (SELECT role, content FROM messages WHERE session_id=? ORDER BY id DESC LIMIT 10) sub ORDER BY rowid`,
+			sessionID,
+		)
+	}
+	if err != nil {
+		return ""
+	}
+	defer rows.Close()
+	var parts []string
+	for rows.Next() {
+		var role, content string
+		rows.Scan(&role, &content)
+		parts = append(parts, fmt.Sprintf("[%s]: %s", role, content))
+	}
+	return strings.Join(parts, "\n\n")
 }

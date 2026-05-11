@@ -22,7 +22,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"log"
+	"log/slog"
 	"net"
 	"net/http"
 	"os"
@@ -121,7 +121,7 @@ func EnsureRunning(p Profile) (string, error) {
 			if err := pushConfig(mgr.port, p); err != nil {
 				return "", fmt.Errorf("push config to running bridge: %w", err)
 			}
-			log.Printf("[router] reused bridge pid=%d port=%d, updated profile %d → %d", mgr.cmd.Process.Pid, mgr.port, mgr.profileID, p.ID)
+			slog.Info("reused bridge pid= port=, updated profile  →", "pid", mgr.cmd.Process.Pid, "port", mgr.port, "profile_i_d", mgr.profileID, "i_d", p.ID)
 			mgr.profileID = p.ID
 			mgr.configSig = sig
 		}
@@ -130,7 +130,7 @@ func EnsureRunning(p Profile) (string, error) {
 
 	// 进程死了 / 不健康：清理后重启
 	if mgr.cmd != nil {
-		log.Printf("[router] previous bridge unhealthy, restarting")
+		slog.Info("previous bridge unhealthy, restarting")
 		stopLocked()
 	}
 
@@ -224,7 +224,7 @@ func startLocked(p Profile, port int) error {
 	mgr.profileID = p.ID
 	mgr.startedAt = time.Now()
 	mgr.lastErr = ""
-	log.Printf("[router] bridge started pid=%d port=%d profile=%d (%s)", cmd.Process.Pid, port, p.ID, p.Name)
+	slog.Info("bridge started pid= port= profile= ()", "pid", cmd.Process.Pid, "value", port, "i_d", p.ID, "name", p.Name)
 
 	go pumpLog("bridge/out", stdout)
 	go pumpLog("bridge/err", stderr)
@@ -233,7 +233,7 @@ func startLocked(p Profile, port int) error {
 		mgr.mu.Lock()
 		defer mgr.mu.Unlock()
 		if mgr.cmd == cmd {
-			log.Printf("[router] bridge exited unexpectedly")
+			slog.Info("bridge exited unexpectedly")
 			mgr.cmd = nil
 			mgr.cancel = nil
 			mgr.port = 0
@@ -276,7 +276,7 @@ func pumpLog(tag string, r io.ReadCloser) {
 		n, err := r.Read(buf)
 		if n > 0 {
 			line := strings.TrimRight(string(buf[:n]), "\n")
-			log.Printf("[%s] %s", tag, line)
+			slog.Info("[]", "value", tag, "value", line)
 			mgr.mu.Lock()
 			mgr.logTail = append(mgr.logTail, line)
 			if len(mgr.logTail) > 50 {

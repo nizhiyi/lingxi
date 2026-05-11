@@ -1,0 +1,525 @@
+import { api } from '../../api/client';
+
+const TOKEN_FLUSH_MS = 50;
+let _tokenBuf = { text: '', thinking: '' };
+let _flushTimer = null;
+
+function flushTokenBuffer(set, get) {
+  const buf = _tokenBuf;
+  _tokenBuf = { text: '', thinking: '' };
+  _flushTimer = null;
+  if (!buf.text && !buf.thinking) return;
+  const blocks = [...get().liveBlocks];
+  if (buf.thinking) {
+    const last = blocks[blocks.length - 1];
+    if (last && last.type === 'thinking') last.text += buf.thinking;
+    else blocks.push({ type: 'thinking', text: buf.thinking });
+  }
+  if (buf.text) {
+    const last = blocks[blocks.length - 1];
+    if (last && last.type === 'text') last.text += buf.text;
+    else blocks.push({ type: 'text', text: buf.text });
+  }
+  set({ liveBlocks: blocks });
+}
+
+function bufferToken(type, chunk, set, get) {
+  _tokenBuf[type] += chunk;
+  if (!_flushTimer) {
+    _flushTimer = setTimeout(() => flushTokenBuffer(set, get), TOKEN_FLUSH_MS);
+  }
+}
+
+function flushNow(set, get) {
+  if (_flushTimer) { clearTimeout(_flushTimer); _flushTimer = null; }
+  flushTokenBuffer(set, get);
+}
+
+function generateQuickReplies(text) {
+  if (!text || text.length < 10) return [];
+  const replies = [];
+
+  if (/代码|函数|代码块|实现|编程|程序/.test(text)) {
+    replies.push('请解释这段代码的工作原理');
+    replies.push('能否优化一下这段代码？');
+    replies.push('请为这段代码添加注释');
+  } else if (/翻译|translation/i.test(text)) {
+    replies.push('翻译得很好，再翻译一段');
+    replies.push('改为更口语化的表达');
+    replies.push('帮我校对一下语法');
+  } else if (/步骤|方案|计划|方法|建议/.test(text)) {
+    replies.push('请详细展开第一步');
+    replies.push('有没有其他替代方案？');
+    replies.push('请总结一下要点');
+  } else if (/表格|数据|分析|统计/.test(text)) {
+    replies.push('请用图表展示');
+    replies.push('帮我进一步分析');
+    replies.push('导出为 CSV 格式');
+  } else if (/总结|摘要|要点/.test(text)) {
+    replies.push('请更详细地展开');
+    replies.push('能否用列表形式重新整理？');
+  } else {
+    replies.push('继续');
+    replies.push('请详细说明');
+    replies.push('帮我总结一下');
+  }
+
+  return replies.slice(0, 3);
+}
+
+export const createChatSlice = (set, get) => ({
+  messages: [],
+  liveBlocks: [],
+  agentState: 'IDLE',
+  isStreaming: false,
+  startedAt: null,
+  suggestedReplies: [],
+  evolutionActivity: [],
+  evolutionProgress: null,
+  evolutionResults: [],
+
+  handleWSEvent: (msg) => {
+    const { event, data, sessionId } = msg;
+    const state = get();
+
+    if (event === 'a2a_message') {
+      if (state.a2aRemoteIsStreaming) {
+        set({ a2aRemoteIsStreaming: false, a2aRemoteLiveBlocks: [] });
+      }
+    }
+
+    if (event === 'a2a_remote_stream') {
+      try {
+        const d = typeof data === 'string' ? JSON.parse(data) : data;
+        const convId = d?.conversation_id;
+        const streamEvent = d?.event;
+        const streamData = d?.data || '';
+
+        if (!convId) return;
+
+        switch (streamEvent) {
+          case 'stream_start':
+            set({ a2aRemoteIsStreaming: true, a2aRemoteLiveBlocks: [], activeA2AConvId: convId });
+            break;
+          case 'stream_done':
+            set({ a2aRemoteIsStreaming: false, a2aRemoteLiveBlocks: [] });
+            break;
+          case 'text': {
+            const blocks = [...state.a2aRemoteLiveBlocks];
+            const last = blocks[blocks.length - 1];
+            if (last && last.type === 'text') last.text += streamData;
+            else blocks.push({ type: 'text', text: streamData });
+            set({ a2aRemoteLiveBlocks: blocks, a2aRemoteIsStreaming: true });
+            break;
+          }
+          case 'thinking': {
+            const blocks = [...state.a2aRemoteLiveBlocks];
+            const last = blocks[blocks.length - 1];
+            if (last && last.type === 'thinking') last.text += streamData;
+            else blocks.push({ type: 'thinking', text: streamData });
+            set({ a2aRemoteLiveBlocks: blocks, a2aRemoteIsStreaming: true });
+            break;
+          }
+        }
+      } catch {}
+      return;
+    }
+
+    if (sessionId && sessionId === state.activeA2ASessionId && sessionId !== state.activeSessionId) {
+      const streamEvents = ['agent_state', 'thinking', 'text', 'tool_start', 'tool_end', 'message_usage', 'done'];
+      if (streamEvents.includes(event)) {
+        let payload;
+        try { payload = data ? JSON.parse(data) : null; } catch { payload = data; }
+        switch (event) {
+          case 'agent_state': {
+            const s = (payload && payload.state) || 'IDLE';
+            if (s === 'THINKING' && !state.a2aIsStreaming) {
+              set({ a2aIsStreaming: true, a2aLiveBlocks: [] });
+            }
+            break;
+          }
+          case 'thinking': {
+            const text = typeof payload === 'string' ? payload : (data || '');
+            const blocks = [...state.a2aLiveBlocks];
+            const last = blocks[blocks.length - 1];
+            if (last && last.type === 'thinking') last.text += text;
+            else blocks.push({ type: 'thinking', text });
+            set({ a2aLiveBlocks: blocks });
+            break;
+          }
+          case 'text': {
+            const text = typeof payload === 'string' ? payload : (data || '');
+            const blocks = [...state.a2aLiveBlocks];
+            const last = blocks[blocks.length - 1];
+            if (last && last.type === 'text') last.text += text;
+            else blocks.push({ type: 'text', text });
+            set({ a2aLiveBlocks: blocks });
+            break;
+          }
+          case 'tool_start': {
+            const blocks = [...state.a2aLiveBlocks];
+            blocks.push({ type: 'tool', name: payload?.name || '', label: payload?.label || '执行技能', startedAt: Date.now(), done: false });
+            set({ a2aLiveBlocks: blocks });
+            break;
+          }
+          case 'tool_end': {
+            if (payload?.hidden) break;
+            const blocks = [...state.a2aLiveBlocks];
+            for (let i = blocks.length - 1; i >= 0; i--) {
+              if (blocks[i].type === 'tool' && !blocks[i].done) {
+                blocks[i].done = true;
+                blocks[i].endedAt = Date.now();
+                if (payload && typeof payload === 'object') {
+                  if (payload.input != null) blocks[i].input = payload.input;
+                  if (payload.label) blocks[i].label = payload.label;
+                  if (payload.ms != null) blocks[i].ms = payload.ms;
+                  if (payload.status) blocks[i].status = payload.status;
+                }
+                break;
+              }
+            }
+            set({ a2aLiveBlocks: blocks });
+            break;
+          }
+          case 'message_usage':
+          case 'done': {
+            if (state.a2aIsStreaming) {
+              set({ a2aLiveBlocks: [], a2aIsStreaming: false });
+              const sid = state.activeA2ASessionId;
+              if (sid) {
+                api.listMessages(sid).then((m) => set({ a2aMessages: m })).catch(() => {});
+              }
+            }
+            break;
+          }
+        }
+        return;
+      }
+    }
+
+    if (sessionId && sessionId !== state.activeSessionId) {
+      if (event === 'profile_changed') {
+        state.refreshProfiles();
+      }
+      return;
+    }
+    let payload;
+    try { payload = data ? JSON.parse(data) : null; } catch { payload = data; }
+
+    switch (event) {
+      case 'agent_state': {
+        const s = (payload && payload.state) || 'IDLE';
+        set({ agentState: s });
+        if (s === 'THINKING' && !state.isStreaming) {
+          set({ isStreaming: true, startedAt: Date.now(), liveBlocks: [] });
+        }
+        break;
+      }
+      case 'thinking': {
+        const text = typeof payload === 'string' ? payload : (data || '');
+        bufferToken('thinking', text, set, get);
+        break;
+      }
+      case 'text': {
+        const text = typeof payload === 'string' ? payload : (data || '');
+        bufferToken('text', text, set, get);
+        break;
+      }
+      case 'tool_start': {
+        flushNow(set, get);
+        const blocks = [...get().liveBlocks];
+        blocks.push({
+          type: 'tool',
+          name: payload?.name || '',
+          label: payload?.label || '执行技能',
+          startedAt: Date.now(),
+          done: false,
+        });
+        set({ liveBlocks: blocks });
+        break;
+      }
+      case 'tool_end': {
+        if (payload?.hidden) break;
+        flushNow(set, get);
+        const blocks = [...get().liveBlocks];
+        for (let i = blocks.length - 1; i >= 0; i--) {
+          if (blocks[i].type === 'tool' && !blocks[i].done) {
+            blocks[i].done = true;
+            blocks[i].endedAt = Date.now();
+            if (payload && typeof payload === 'object') {
+              if (payload.input != null) blocks[i].input = payload.input;
+              if (payload.label) blocks[i].label = payload.label;
+              if (payload.ms != null) blocks[i].ms = payload.ms;
+              if (payload.status) blocks[i].status = payload.status;
+            }
+            break;
+          }
+        }
+        set({ liveBlocks: blocks });
+        break;
+      }
+      case 'message_usage': {
+        flushNow(set, get);
+        const usage = payload?.usage;
+        const messageId = payload?.messageId;
+        if (!usage) break;
+        const finalBlocks = get().liveBlocks.filter((b) => b.text || b.type === 'tool');
+        const newMsg = {
+          id: messageId || -Date.now(),
+          session_id: state.activeSessionId,
+          role: 'assistant',
+          content: JSON.stringify(finalBlocks),
+          usage: JSON.stringify(usage),
+          created_at: new Date().toISOString(),
+        };
+        set({
+          messages: [...state.messages, newMsg],
+          liveBlocks: [],
+          isStreaming: false,
+          agentState: 'DONE',
+        });
+        state.refreshTodayUsage();
+        break;
+      }
+      case 'suggested_replies': {
+        const replies = Array.isArray(payload) ? payload : [];
+        set({ suggestedReplies: replies.slice(0, 3) });
+        break;
+      }
+      case 'done': {
+        flushNow(set, get);
+        if (get().isStreaming) {
+          const finalBlocks = get().liveBlocks.filter((b) => b.text || b.type === 'tool');
+          if (finalBlocks.length > 0) {
+            const newMsg = {
+              id: -Date.now(),
+              session_id: state.activeSessionId,
+              role: 'assistant',
+              content: JSON.stringify(finalBlocks),
+              usage: '',
+              created_at: new Date().toISOString(),
+            };
+            set({ messages: [...state.messages, newMsg] });
+          }
+          set({ liveBlocks: [], isStreaming: false, agentState: 'DONE' });
+
+          const lastText = finalBlocks.filter(b => b.type === 'text').map(b => b.text).join('').slice(0, 500);
+          const suggestions = generateQuickReplies(lastText);
+          if (suggestions.length > 0) set({ suggestedReplies: suggestions });
+        }
+        if (state.activeSessionId) {
+          api.listMessages(state.activeSessionId).then((m) => set({ messages: m })).catch(() => {});
+        }
+        break;
+      }
+      case 'profile_changed': {
+        state.refreshProfiles();
+        state.pushNotification({ title: '已切换模型', body: payload?.name || '激活档案已更新' });
+        break;
+      }
+      case 'agent_changed': {
+        state.refreshAgents();
+        break;
+      }
+      case 'mcp_changed': {
+        state.pushNotification({ title: 'MCP 配置已更新', body: '将在下次新对话生效' });
+        break;
+      }
+      case 'notification': {
+        if (payload) state.pushNotification(payload);
+        break;
+      }
+      case 'evolution_progress': {
+        const info = typeof payload === 'object' ? payload : {};
+        if (info.phase === 'done' || info.phase === 'error') {
+          const delay = info.phase === 'error' ? 10000 : 5000;
+          setTimeout(() => {
+            const cur = get().evolutionProgress;
+            if (cur && (cur.phase === 'done' || cur.phase === 'error')) {
+              set({ evolutionProgress: null });
+            }
+          }, delay);
+        }
+        set({ evolutionProgress: { ...info, ts: Date.now() } });
+        break;
+      }
+      case 'evolution_status': {
+        const info = typeof payload === 'object' ? payload : {};
+        const evoLog = [...(state.evolutionActivity || [])];
+        evoLog.unshift({ ...info, ts: Date.now() });
+        if (evoLog.length > 50) evoLog.length = 50;
+        set({ evolutionActivity: evoLog });
+        if (info.phase === 'done' && info.results) {
+          const results = [...(state.evolutionResults || [])];
+          results.unshift({ ...info, ts: Date.now(), dismissed: false });
+          if (results.length > 20) results.length = 20;
+          set({ evolutionResults: results });
+        }
+        break;
+      }
+      case 'evolution_result': {
+        const info = typeof payload === 'object' ? payload : {};
+        const evoLog = [...(state.evolutionActivity || [])];
+        evoLog.unshift({ phase: 'result', ...info, ts: Date.now() });
+        if (evoLog.length > 50) evoLog.length = 50;
+        set({ evolutionActivity: evoLog });
+        const results = [...(state.evolutionResults || [])];
+        results.unshift({ phase: 'result', ...info, ts: Date.now(), dismissed: false });
+        if (results.length > 20) results.length = 20;
+        set({ evolutionResults: results });
+        break;
+      }
+      case 'evolution_reverted': {
+        const info = typeof payload === 'object' ? payload : {};
+        const evoLog = [...(state.evolutionActivity || [])];
+        evoLog.unshift({ phase: 'reverted', ...info, ts: Date.now() });
+        if (evoLog.length > 50) evoLog.length = 50;
+        set({ evolutionActivity: evoLog });
+        break;
+      }
+      case 'desktop_notify': {
+        const info = typeof payload === 'object' ? payload : {};
+        const title = info.title || '灵犀 — 定时任务';
+        const body = info.body || '任务已完成';
+        state.pushNotification({ title, body });
+        if (window.electronAPI?.showNotification) {
+          window.electronAPI.showNotification(title, body);
+        } else if (typeof Notification !== 'undefined' && Notification.permission === 'granted') {
+          new Notification(title, { body });
+        } else if (typeof Notification !== 'undefined' && Notification.permission !== 'denied') {
+          Notification.requestPermission().then(perm => {
+            if (perm === 'granted') new Notification(title, { body });
+          });
+        }
+        break;
+      }
+      default: break;
+    }
+  },
+
+  sendMessage: async ({ message, images = [], useKB = false, files = [] }) => {
+    let sid = get().activeSessionId;
+    if (!sid) {
+      sid = await get().createSession();
+    }
+    let localContent = message || (images.length ? '[图片]' : '');
+    if (images.length > 0 || files.length > 0) {
+      const previewImages = images.map((img) => `data:${img.mediaType};base64,${img.data}`);
+      const fileRefs = files.map((f) => ({ name: f.name, size: f.size }));
+      localContent = JSON.stringify({ text: message || '', images: previewImages, files: fileRefs });
+    }
+    const localUserMsg = {
+      id: -Date.now(),
+      session_id: sid,
+      role: 'user',
+      content: localContent,
+      created_at: new Date().toISOString(),
+    };
+    set({
+      messages: [...get().messages, localUserMsg],
+      liveBlocks: [],
+      isStreaming: true,
+      startedAt: Date.now(),
+      agentState: 'THINKING',
+      suggestedReplies: [],
+    });
+    try {
+      await api.sendChat({
+        message,
+        sessionId: String(sid),
+        useKB,
+        images,
+        files,
+      });
+    } catch (e) {
+      set({ isStreaming: false, agentState: 'IDLE' });
+      get().pushNotification({ title: '发送失败', body: e.message });
+    }
+  },
+
+  abort: async () => {
+    const sid = get().activeSessionId;
+    if (!sid) return;
+    await api.abortChat(sid).catch(() => {});
+    set({ isStreaming: false, agentState: 'IDLE' });
+  },
+
+  editAndResend: async (messageId, newContent) => {
+    const { messages, activeSessionId, isStreaming } = get();
+    if (isStreaming || !activeSessionId) return;
+    const idx = messages.findIndex((m) => m.id === messageId);
+    if (idx < 0) return;
+    try {
+      await api.updateMessage(messageId, newContent);
+    } catch (e) {
+      get().pushNotification({ title: '编辑失败', body: e.message });
+      return;
+    }
+    const updated = { ...messages[idx], content: newContent };
+    set({
+      messages: [...messages.slice(0, idx), updated],
+      liveBlocks: [],
+      isStreaming: true,
+      startedAt: Date.now(),
+      agentState: 'THINKING',
+    });
+    try {
+      await api.sendChat({ message: newContent, sessionId: String(activeSessionId) });
+    } catch (e) {
+      set({ isStreaming: false, agentState: 'IDLE' });
+      get().pushNotification({ title: '重新生成失败', body: e.message });
+    }
+  },
+
+  setFeedback: async (messageId, feedback) => {
+    try {
+      await api.setMessageFeedback(messageId, feedback);
+    } catch (e) {
+      get().pushNotification({ title: '反馈失败', body: e.message });
+      return;
+    }
+    set({
+      messages: get().messages.map((m) =>
+        m.id === messageId ? { ...m, feedback } : m
+      ),
+    });
+  },
+
+  regenerate: async (messageId) => {
+    const { messages, activeSessionId, isStreaming } = get();
+    if (isStreaming || !activeSessionId) return;
+    const idx = messages.findIndex((m) => m.id === messageId);
+    if (idx < 0) return;
+    let userMsg = null;
+    for (let i = idx - 1; i >= 0; i--) {
+      if (messages[i].role === 'user') { userMsg = messages[i]; break; }
+    }
+    if (!userMsg) return;
+    let text = userMsg.content || '';
+    let images = [];
+    try {
+      const obj = JSON.parse(text);
+      if (obj?.text != null) {
+        text = obj.text;
+        images = (obj.images || []).filter(src => src.startsWith('data:')).map((src) => {
+          const [header, b64] = src.split(',');
+          const mt = (header.match(/data:(.*?);/) || [])[1] || 'image/png';
+          return { mediaType: mt, data: b64 || '' };
+        });
+      }
+    } catch {}
+    set({
+      messages: messages.slice(0, idx),
+      liveBlocks: [],
+      isStreaming: true,
+      startedAt: Date.now(),
+      agentState: 'THINKING',
+    });
+    try {
+      await api.sendChat({ message: text, sessionId: String(activeSessionId), images });
+    } catch (e) {
+      set({ isStreaming: false, agentState: 'IDLE' });
+      get().pushNotification({ title: '重新生成失败', body: e.message });
+    }
+  },
+});

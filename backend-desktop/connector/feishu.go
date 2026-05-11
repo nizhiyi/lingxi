@@ -4,7 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"log"
+	"log/slog"
 
 	larkcore "github.com/larksuite/oapi-sdk-go/v3/core"
 	"github.com/larksuite/oapi-sdk-go/v3/event/dispatcher"
@@ -52,7 +52,7 @@ func (f *FeishuConnector) Start(ctx context.Context) error {
 		larkws.WithLogLevel(larkcore.LogLevelInfo),
 	)
 
-	log.Printf("[feishu] starting ws client, app_id=%s", f.cfg.AppID)
+	slog.Info("starting ws client, app_id", "app_i_d", f.cfg.AppID)
 	go func() {
 		<-ctx.Done()
 		// 飞书 SDK 没有显式 Close，依赖 ctx 取消
@@ -90,7 +90,7 @@ func (f *FeishuConnector) onMessage(ctx context.Context, event *larkim.P2Message
 		return nil
 	}
 
-	log.Printf("[feishu] received message from %s: %s", senderID, text)
+	slog.Debug("received message from", "value", senderID, "value", text)
 
 	replyFunc := func(reply string) error {
 		return f.sendReply(ctx, msgID, chatID, reply)

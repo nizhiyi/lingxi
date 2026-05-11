@@ -5,7 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"log"
+	"log/slog"
 	"net/http"
 	"strconv"
 	"strings"
@@ -61,8 +61,7 @@ func SetActiveSecret(c *gin.Context) {
 	activeRuntime.protocol = body.Protocol
 	activeRuntime.transformer = body.Transformer
 	activeRuntime.mu.Unlock()
-	log.Printf("[provider] active secret set: id=%d proto=%s model=%s base=%s tokenLen=%d",
-		body.ID, body.Protocol, body.Model, body.BaseURL, len(body.Token))
+	slog.Info("SetActiveSecret", "id", body.ID, "protocol", body.Protocol, "model", body.Model, "baseURL", body.BaseURL, "tokenLen", len(body.Token))
 	c.JSON(http.StatusOK, gin.H{"ok": true})
 }
 
@@ -102,11 +101,16 @@ func clearActiveRuntimeIf(id int64) bool {
 
 // ListProviders GET /api/providers
 func ListProviders(c *gin.Context) {
+	if cached, ok := apiCache.Get("providers"); ok {
+		c.JSON(http.StatusOK, cached)
+		return
+	}
 	list, err := db.ListProviders()
 	if err != nil {
 		c.Status(http.StatusInternalServerError)
 		return
 	}
+	apiCache.Set("providers", list)
 	c.JSON(http.StatusOK, list)
 }
 
@@ -165,7 +169,7 @@ func UpsertAPIProfile(c *gin.Context) {
 	}
 	id, err := db.UpsertAPIProfile(ap)
 	if err != nil {
-		log.Printf("[provider] upsert error: %v", err)
+		slog.Warn("upsert error", "err", err)
 		c.Status(http.StatusInternalServerError)
 		return
 	}
@@ -186,7 +190,7 @@ func DeleteAPIProfile(c *gin.Context) {
 	// 如果删的恰好是当前激活档案：清内存 + 关闭 bridge + 通知前端刷新
 	if clearActiveRuntimeIf(id) {
 		router.Stop()
-		log.Printf("[provider] active profile %d deleted, runtime cleared", id)
+		slog.Info("active profile  deleted, runtime cleared", "value", id)
 		payload, _ := json.Marshal(map[string]interface{}{
 			"id":      id,
 			"deleted": true,

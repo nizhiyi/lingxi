@@ -3,6 +3,7 @@ import { motion, AnimatePresence } from 'framer-motion';
 import {
   Sparkles, Plus, Trash2, Edit3, Bot, Brain, BookOpen, Plug,
   ArrowLeft, Wand2, Check, X, Shield, LayoutGrid, Download, Upload, Globe,
+  Zap, History, ChevronDown, ChevronUp,
 } from 'lucide-react';
 import { cn } from './ui/cn';
 import { api } from './api/client';
@@ -405,6 +406,11 @@ function AgentEditor({ open, value, onClose, onSave }) {
                   <Badge tone="success"><Plug size={9} /> MCP {form.allow_all ? '全部' : mcpIds.length}</Badge>
                 </div>
               </div>
+              {form.id > 0 && (
+                <div className="mt-4">
+                  <EvolutionToggle agentId={form.id} />
+                </div>
+              )}
             </div>
           </div>
         )}
@@ -743,3 +749,112 @@ function TemplateMarket({ open, onClose, onCreate }) {
   );
 }
 
+function EvolutionToggle({ agentId }) {
+  const [enabled, setEnabled] = useState(false);
+  const [loading, setLoading] = useState(true);
+  const [showLogs, setShowLogs] = useState(false);
+
+  useEffect(() => {
+    if (!agentId) return;
+    api.getEvolutionConfig(agentId).then((r) => {
+      setEnabled(r.enabled);
+      setLoading(false);
+    }).catch(() => setLoading(false));
+  }, [agentId]);
+
+  const toggle = async () => {
+    const next = !enabled;
+    setEnabled(next);
+    await api.setEvolutionConfig(agentId, next).catch(() => setEnabled(!next));
+  };
+
+  if (loading) return null;
+
+  return (
+    <div className="space-y-2">
+      <div className="flex items-center justify-between">
+        <div className="flex items-center gap-2 text-xs text-[color:var(--text-soft)]">
+          <Zap size={13} className="text-[color:var(--accent)]" />
+          <span>自我进化</span>
+        </div>
+        <button
+          onClick={toggle}
+          className={cn(
+            'relative w-9 h-5 rounded-full transition-colors',
+            enabled ? 'bg-[color:var(--accent)]' : 'bg-[color:var(--line)]'
+          )}
+        >
+          <div className={cn(
+            'absolute top-0.5 w-4 h-4 rounded-full bg-white shadow transition-transform',
+            enabled ? 'translate-x-4' : 'translate-x-0.5'
+          )} />
+        </button>
+      </div>
+      <div className="text-[11px] text-[color:var(--text-faint)]">
+        开启后，负面反馈或用户纠正会自动分析并写入记忆/知识库
+      </div>
+      {enabled && (
+        <button
+          onClick={() => setShowLogs(!showLogs)}
+          className="flex items-center gap-1 text-[11px] text-[color:var(--accent)] hover:underline"
+        >
+          <History size={11} />
+          进化日志
+          {showLogs ? <ChevronUp size={11} /> : <ChevronDown size={11} />}
+        </button>
+      )}
+      {showLogs && <EvolutionLogViewer agentId={agentId} />}
+    </div>
+  );
+}
+
+function EvolutionLogViewer({ agentId }) {
+  const [logs, setLogs] = useState([]);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    api.listEvolutionLogs(agentId, 20).then((r) => {
+      setLogs(Array.isArray(r) ? r : []);
+      setLoading(false);
+    }).catch(() => setLoading(false));
+  }, [agentId]);
+
+  const clearAll = async () => {
+    await api.clearEvolutionLogs(agentId);
+    setLogs([]);
+  };
+
+  const deleteOne = async (id) => {
+    await api.deleteEvolutionLog(id);
+    setLogs(logs.filter(l => l.id !== id));
+  };
+
+  if (loading) return <div className="text-[11px] text-[color:var(--text-faint)] py-2">加载中…</div>;
+  if (logs.length === 0) return <div className="text-[11px] text-[color:var(--text-faint)] py-2">暂无进化记录</div>;
+
+  return (
+    <div className="space-y-1.5 max-h-[200px] overflow-y-auto scrollable">
+      <div className="flex justify-between items-center">
+        <span className="text-[10px] text-[color:var(--text-faint)]">{logs.length} 条记录</span>
+        <button onClick={clearAll} className="text-[10px] text-danger hover:underline">清空</button>
+      </div>
+      {logs.map((log) => (
+        <div key={log.id} className="surface px-3 py-2 text-[11px] flex justify-between items-start gap-2 group">
+          <div className="flex-1 min-w-0">
+            <div className="flex items-center gap-1.5 mb-0.5">
+              <Badge tone={log.action === 'create_memory' ? 'accent' : 'success'} className="text-[9px]">
+                {log.action === 'create_memory' ? '记忆' : '知识'}
+              </Badge>
+              <Badge tone="default" className="text-[9px]">{log.trigger}</Badge>
+              <span className="text-[color:var(--text-faint)]">{new Date(log.created_at).toLocaleString()}</span>
+            </div>
+            <div className="text-[color:var(--text-soft)] truncate">{log.summary}</div>
+          </div>
+          <button onClick={() => deleteOne(log.id)} className="text-[color:var(--text-faint)] hover:text-danger opacity-0 group-hover:opacity-100 transition shrink-0">
+            <Trash2 size={11} />
+          </button>
+        </div>
+      ))}
+    </div>
+  );
+}

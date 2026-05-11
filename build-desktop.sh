@@ -348,3 +348,23 @@ echo "  输出目录: $ROOT_DIR/dist-electron"
 echo "========================================"
 ls -lh "$ROOT_DIR/dist-electron/" 2>/dev/null || true
 
+# ── 6. 自动安装到 /Applications（仅 macOS）──────────────────────
+for bt in $BUILD_TARGETS; do
+  if [ "$bt" = "mac" ]; then
+    APP_SRC="$ROOT_DIR/dist-electron/mac-arm64/灵犀.app"
+    APP_DST="/Applications/灵犀.app"
+    if [ -d "$APP_SRC" ]; then
+      echo ""
+      echo "▶ [6/6] 安装到 /Applications..."
+      # 杀掉正在运行的旧版本进程
+      pkill -f "$APP_DST/Contents/MacOS" 2>/dev/null || true
+      sleep 1
+      rm -rf "$APP_DST"
+      cp -R "$APP_SRC" "$APP_DST"
+      echo "  ✓ 已安装到 $APP_DST (v$NEW_VERSION)"
+      echo ""
+      echo "  启动命令: open \"$APP_DST\""
+    fi
+  fi
+done
+

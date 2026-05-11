@@ -38,6 +38,7 @@ export const api = {
   pinSession: (id, pinned) => req('PATCH', `/api/sessions/${id}`, { pinned }),
   deleteSession: (id) => req('DELETE', `/api/sessions/${id}`),
   batchDeleteSessions: (ids) => req('POST', '/api/sessions/batch-delete', { ids }),
+  extractSessionKnowledge: (id) => req('POST', `/api/sessions/${id}/extract-knowledge`),
   listMessages: (id) => req('GET', `/api/sessions/${id}/messages`),
   setSessionAgent: (id, agent_id) => req('POST', `/api/sessions/${id}/agent`, { agent_id }),
 
@@ -140,6 +141,24 @@ export const api = {
   deleteA2AConversation: (id) => req('DELETE', `/api/a2a-conversations/${id}`),
   getAgentNexusConfig: (id) => req('GET', `/api/agents/${id}/nexus-config`),
   updateAgentNexusConfig: (id, data) => req('PUT', `/api/agents/${id}/nexus-config`, data),
+
+  // ── 自我进化 ─────────────────────────────────────────────────
+  getEvolutionConfig: (id) => req('GET', `/api/agents/${id}/evolution`),
+  setEvolutionConfig: (id, enabled) => req('PUT', `/api/agents/${id}/evolution`, { enabled }),
+  listEvolutionLogs: (id, limit = 50) => req('GET', `/api/agents/${id}/evolution/logs?limit=${limit}`),
+  clearEvolutionLogs: (id) => req('DELETE', `/api/agents/${id}/evolution/logs`),
+  deleteEvolutionLog: (logId) => req('DELETE', `/api/evolution/logs/${logId}`),
+  revertEvolutionLog: (logId) => req('POST', `/api/evolution/logs/${logId}/revert`),
+  manualExtract: (id, data) => req('POST', `/api/agents/${id}/evolution/extract`, data),
+  listAllEvolutionLogs: (limit = 100, offset = 0) => req('GET', `/api/evolution/logs?limit=${limit}&offset=${offset}`),
+  getEvolutionStats: () => req('GET', '/api/evolution/stats'),
+
+  // ── 数据备份 ─────────────────────────────────────────────────
+  exportBackup: () => `${BASE}/api/backup/export`,
+  healthCheck: () => req('GET', '/api/health'),
+
+  // ── 批量技能导出 ──────────────────────────────────────────────
+  batchExportSkills: (ids) => req('POST', '/api/skills/batch-export', { ids }),
 
   // ── WAN (广域网) ──────────────────────────────────────────────
   listWANPeers: () => req('GET', '/api/wan/peers'),

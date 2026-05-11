@@ -2,7 +2,7 @@ package connector
 
 import (
 	"fmt"
-	"log"
+	"log/slog"
 	"strings"
 
 	"lingxi-agent/db"
@@ -25,14 +25,14 @@ func Dispatch(msg IMMessage) {
 		return
 	}
 	if runClaude == nil {
-		log.Printf("[connector] ClaudeRunner not set, dropping message")
+		slog.Info("ClaudeRunner not set, dropping message")
 		return
 	}
 
 	// 立即回复"收到"，让用户知道消息已被接收
 	if msg.ReplyFunc != nil {
 		if err := msg.ReplyFunc("收到，正在为您分析问题，请稍候..."); err != nil {
-			log.Printf("[connector] ack reply error: %v", err)
+			slog.Warn("ack reply error", "err", err)
 		}
 	}
 
@@ -47,14 +47,14 @@ func Dispatch(msg IMMessage) {
 		}
 
 		scopeKey := computeScopeKey(msg, cfg.SessionMode)
-		log.Printf("[connector] dispatch platform=%s mode=%s scope=%s", msg.Platform, cfg.SessionMode, scopeKey)
+		slog.Info("dispatch platform= mode= scope", "platform", msg.Platform, "session_mode", cfg.SessionMode, "value", scopeKey)
 
 		var sessionID int64
 		if cfg.SessionMode != SessionModeStateless {
 			title := buildSessionTitle(msg)
 			sid, err := db.GetOrCreateIMSession(msg.Platform, scopeKey, title, cfg.SessionTTLHours)
 			if err != nil {
-				log.Printf("[connector] GetOrCreateIMSession error: %v", err)
+				slog.Warn("GetOrCreateIMSession error", "err", err)
 				if msg.ReplyFunc != nil {
 					_ = msg.ReplyFunc("抱歉，初始化会话失败，请稍后再试。")
 				}
@@ -65,7 +65,7 @@ func Dispatch(msg IMMessage) {
 
 		reply, _, err := runClaude(msg.Text, sessionID)
 		if err != nil {
-			log.Printf("[connector] RunClaudeSync error: %v", err)
+			slog.Warn("RunClaudeSync error", "err", err)
 			if msg.ReplyFunc != nil {
 				_ = msg.ReplyFunc("抱歉，处理消息时出现错误，请稍后再试。")
 			}
@@ -83,7 +83,7 @@ func Dispatch(msg IMMessage) {
 
 		if msg.ReplyFunc != nil {
 			if err := msg.ReplyFunc(reply); err != nil {
-				log.Printf("[connector] ReplyFunc error: %v", err)
+				slog.Warn("ReplyFunc error", "err", err)
 			}
 		}
 	}()

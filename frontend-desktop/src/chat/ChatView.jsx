@@ -1,11 +1,13 @@
 import { useEffect, useMemo, useState } from 'react';
-import { Bot, BookOpen, Brain, Cpu, Plug, Search, Download, Zap } from 'lucide-react';
+import { Bot, BookOpen, Brain, Cpu, Plug, Search, Download, Zap, Dna, Undo2, X } from 'lucide-react';
 import { parseAssistantContent } from './blockUtils';
 import { useStore } from '../state/useStore';
 import { MessageList } from './MessageList';
 import { Composer } from './Composer';
 import { SearchModal } from './SearchModal';
 import { Badge } from '../ui/primitives';
+import { api } from '../api/client';
+import { cn } from '../ui/cn';
 
 export function ChatView() {
   const [useKB, setUseKB] = useState(false);
@@ -29,6 +31,7 @@ export function ChatView() {
     <div className="flex-1 flex flex-col min-h-0">
       <ChatContextBar useKB={useKB} onSearchOpen={() => setSearchOpen(true)} />
       <MessageList />
+      <EvolutionInlineNotify />
       {suggestedReplies.length > 0 && !isStreaming && (
         <div className="px-6">
           <div className="max-w-3xl mx-auto flex items-center gap-2 flex-wrap pb-2">
@@ -149,6 +152,114 @@ function summarizeCapability(agent) {
 
 function parseList(s) {
   try { return JSON.parse(s || '[]'); } catch { return []; }
+}
+
+function EvolutionInlineNotify() {
+  const evolutionResults = useStore((s) => s.evolutionResults);
+  const messages = useStore((s) => s.messages);
+  const isStreaming = useStore((s) => s.isStreaming);
+  const activeSessionId = useStore((s) => s.activeSessionId);
+  const sessions = useStore((s) => s.sessions);
+  const [dismissed, setDismissed] = useState(new Set());
+  const [reverting, setReverting] = useState(null);
+  const [extractDismissed, setExtractDismissed] = useState(false);
+  const [extracting, setExtracting] = useState(false);
+
+  const visible = (evolutionResults || []).filter(
+    (r) => !dismissed.has(r.ts) && (Date.now() - r.ts) < 60000
+  );
+
+  const session = sessions?.find((s) => s.id === activeSessionId);
+  const agentId = session?.agent_id;
+  const showExtractHint = !isStreaming && !extractDismissed && messages.length >= 8 && agentId && visible.length === 0;
+
+  if (visible.length === 0 && !showExtractHint) return null;
+
+  if (showExtractHint && visible.length === 0) {
+    return (
+      <div className="px-6 pb-2">
+        <div className="max-w-3xl mx-auto">
+          <div className="flex items-center gap-3 px-4 py-2.5 rounded-xl border border-[color:var(--line)] bg-[color:var(--bg-soft)]">
+            <Dna size={14} className="text-purple-500 shrink-0" />
+            <span className="text-[11px] text-[color:var(--text-soft)] flex-1">
+              这段对话可能包含有价值的知识，要提取吗？
+            </span>
+            <button
+              disabled={extracting}
+              onClick={async () => {
+                setExtracting(true);
+                try {
+                  await api.extractSessionKnowledge(activeSessionId);
+                } catch {}
+                setExtracting(false);
+                setExtractDismissed(true);
+              }}
+              className="text-[11px] px-2.5 py-1 rounded-md bg-purple-500/10 text-purple-500 hover:bg-purple-500/20 font-medium transition"
+            >
+              {extracting ? '提取中...' : '一键提取'}
+            </button>
+            <button
+              onClick={() => setExtractDismissed(true)}
+              className="text-[color:var(--text-faint)] hover:text-[color:var(--text)] transition p-1"
+            >
+              <X size={10} />
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  const handleRevert = async (result) => {
+    if (!result.log_id) return;
+    setReverting(result.ts);
+    try {
+      await api.revertEvolutionLog(result.log_id);
+      setDismissed((prev) => new Set([...prev, result.ts]));
+    } catch {}
+    setReverting(null);
+  };
+
+  return (
+    <div className="px-6 pb-2">
+      <div className="max-w-3xl mx-auto space-y-2">
+        {visible.slice(0, 3).map((result) => (
+          <div
+            key={result.ts}
+            className="flex items-start gap-3 px-4 py-3 rounded-xl border border-purple-500/20 bg-purple-500/5"
+          >
+            <Dna size={14} className="text-purple-500 mt-0.5 shrink-0" />
+            <div className="flex-1 min-w-0">
+              <div className="text-xs font-medium text-purple-600 dark:text-purple-400">
+                已学习
+              </div>
+              <p className="text-[11px] text-[color:var(--text-soft)] mt-0.5 line-clamp-2">
+                {result.summary || result.action || '新知识已记录'}
+              </p>
+            </div>
+            <div className="flex items-center gap-1 shrink-0">
+              {result.log_id && (
+                <button
+                  onClick={() => handleRevert(result)}
+                  disabled={reverting === result.ts}
+                  className="text-[10px] px-2 py-1 rounded-md border border-[color:var(--line)] text-[color:var(--text-faint)] hover:text-red-500 hover:border-red-500/30 transition"
+                  title="撤销此进化"
+                >
+                  <Undo2 size={10} />
+                </button>
+              )}
+              <button
+                onClick={() => setDismissed((prev) => new Set([...prev, result.ts]))}
+                className="text-[color:var(--text-faint)] hover:text-[color:var(--text)] transition p-1"
+              >
+                <X size={10} />
+              </button>
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
 }
 
 function exportToMarkdown(messages, title) {

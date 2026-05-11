@@ -1,5 +1,5 @@
 import { useState, useCallback, useRef, useEffect } from 'react';
-import { Copy, Check, RefreshCw, User, Sparkles, Pencil, X, Send, ThumbsUp, ThumbsDown, Volume2, VolumeX, Pin, FileText } from 'lucide-react';
+import { Copy, Check, RefreshCw, User, Sparkles, Pencil, X, Send, ThumbsUp, ThumbsDown, Volume2, VolumeX, Pin, FileText, Zap, Loader2 } from 'lucide-react';
 import { BlocksRenderer, UsageFooter } from './blocks';
 import { parseAssistantContent } from './blockUtils';
 import { useStore } from '../state/useStore';
@@ -230,6 +230,7 @@ export function AssistantBubble({ message, live = false, liveBlocks = null }) {
   const blocks = liveBlocks || parseAssistantContent(message?.content || '');
   const [copied, setCopied] = useState(false);
   const [speaking, setSpeaking] = useState(false);
+  const [extracting, setExtracting] = useState(0);
   const utteranceRef = useRef(null);
   const regenerate = useStore((s) => s.regenerate);
   const setFeedback = useStore((s) => s.setFeedback);
@@ -340,6 +341,42 @@ export function AssistantBubble({ message, live = false, liveBlocks = null }) {
                   title="重新生成"
                 >
                   <RefreshCw size={14} />
+                </button>
+              )}
+              {message?.id && message.id > 0 && (
+                <button
+                  disabled={extracting > 0}
+                  onClick={async () => {
+                    const sid = useStore.getState().activeSessionId;
+                    const agentId = useStore.getState().sessions?.find(s => s.id === sid)?.agent_id;
+                    if (!agentId) return;
+                    setExtracting(1);
+                    try {
+                      await api.manualExtract(agentId, { session_id: sid, message_id: message.id });
+                      setExtracting(2);
+                      setTimeout(() => setExtracting(0), 3000);
+                    } catch {
+                      setExtracting(3);
+                      setTimeout(() => setExtracting(0), 3000);
+                    }
+                  }}
+                  className={cn(
+                    'flex items-center gap-1 px-2 py-1 rounded-md text-[11px] font-medium border transition-all',
+                    extracting === 0 && 'border-purple-500/20 text-purple-500 hover:bg-purple-500/10 hover:border-purple-500/40',
+                    extracting === 1 && 'border-purple-500/30 text-purple-500 bg-purple-500/5',
+                    extracting === 2 && 'border-emerald-500/30 text-emerald-500 bg-emerald-500/5',
+                    extracting === 3 && 'border-red-500/30 text-red-500 bg-red-500/5',
+                  )}
+                  title="从这条对话中提取有价值的知识、记忆或修复建议，写入 Agent 的长期记忆"
+                >
+                  {extracting === 1 ? <Loader2 size={12} className="animate-spin" />
+                    : extracting === 2 ? <Check size={12} />
+                    : extracting === 3 ? <Zap size={12} />
+                    : <Zap size={12} />}
+                  {extracting === 0 && '提取知识'}
+                  {extracting === 1 && '分析中...'}
+                  {extracting === 2 && '已学习'}
+                  {extracting === 3 && '失败'}
                 </button>
               )}
             </div>

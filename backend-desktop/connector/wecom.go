@@ -11,7 +11,7 @@ import (
 	"encoding/xml"
 	"fmt"
 	"io"
-	"log"
+	"log/slog"
 	"net/http"
 	"sort"
 	"strings"
@@ -67,7 +67,7 @@ func (w *WecomConnector) Start(ctx context.Context) error {
 	w.router.GET("/wecom/callback", w.handleVerify)
 	w.router.POST("/wecom/callback", w.handleMessage)
 
-	log.Printf("[wecom] webhook registered at /api/wecom/callback, corp_id=%s", w.cfg.CorpID)
+	slog.Info("webhook registered at /api/wecom/callback, corp_id", "corp_i_d", w.cfg.CorpID)
 	// Webhook 模式无需阻塞，路由注册完即可
 	<-ctx.Done()
 	return nil
@@ -94,7 +94,7 @@ func (w *WecomConnector) handleVerify(c *gin.Context) {
 	// 解密 echostr
 	plain, err := w.decryptMsg(echostr)
 	if err != nil {
-		log.Printf("[wecom] decrypt echostr error: %v", err)
+		slog.Warn("decrypt echostr error", "err", err)
 		c.Status(http.StatusInternalServerError)
 		return
 	}
@@ -129,7 +129,7 @@ func (w *WecomConnector) handleMessage(c *gin.Context) {
 
 	plain, err := w.decryptMsg(encXML.Encrypt)
 	if err != nil {
-		log.Printf("[wecom] decrypt message error: %v", err)
+		slog.Warn("decrypt message error", "err", err)
 		c.Status(http.StatusInternalServerError)
 		return
 	}
@@ -146,7 +146,7 @@ func (w *WecomConnector) handleMessage(c *gin.Context) {
 		return
 	}
 
-	log.Printf("[wecom] received message from %s: %s", msg.FromUserName, msg.Content)
+	slog.Debug("received message from", "from_user_name", msg.FromUserName, "content", msg.Content)
 
 	replyFunc := func(reply string) error {
 		return w.sendTextMsg(msg.FromUserName, reply)

@@ -5,7 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"log"
+	"log/slog"
 	"mime/multipart"
 	"net/http"
 	"os"
@@ -48,7 +48,7 @@ func TranscribeAudio(c *gin.Context) {
 	if whisperBin != "" && whisperModel != "" {
 		text, err := transcribeLocal(whisperBin, whisperModel, audioData, filename)
 		if err != nil {
-			log.Printf("[transcribe] local whisper error: %v, falling back to remote", err)
+			slog.Warn("local whisper error, falling back to remote", "err", err)
 		} else {
 			c.JSON(http.StatusOK, gin.H{"text": text})
 			return
@@ -70,7 +70,7 @@ func TranscribeAudio(c *gin.Context) {
 
 	text, err := callWhisperAPI(whisperURL, token, audioData, filename)
 	if err != nil {
-		log.Printf("[transcribe] remote error: %v", err)
+		slog.Warn("remote error", "err", err)
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
@@ -136,7 +136,7 @@ func transcribeLocal(whisperBin, modelPath string, audioData []byte, filename st
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
 
-	log.Printf("[transcribe] running whisper: %s", cmd.String())
+	slog.Info("running whisper", "string()", cmd.String())
 	if err := cmd.Run(); err != nil {
 		return "", fmt.Errorf("whisper 执行失败: %v, stderr: %s", err, stderr.String())
 	}
@@ -150,7 +150,7 @@ func transcribeLocal(whisperBin, modelPath string, audioData []byte, filename st
 		return "", fmt.Errorf("whisper 未识别到有效文本")
 	}
 
-	log.Printf("[transcribe] local result: %s", truncateStr(text, 100))
+	slog.Info("local whisper result", "text", truncateStr(text, 100))
 	return text, nil
 }
 

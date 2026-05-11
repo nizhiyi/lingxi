@@ -3,7 +3,7 @@ package connector
 import (
 	"context"
 	"encoding/json"
-	"log"
+	"log/slog"
 	"os"
 
 	"github.com/open-dingtalk/dingtalk-stream-sdk-go/chatbot"
@@ -52,18 +52,18 @@ func (d *DingtalkConnector) Start(ctx context.Context) error {
 	)
 	d.cli.RegisterChatBotCallbackRouter(d.onMessage)
 
-	log.Printf("[dingtalk] starting stream client, client_id=%s", d.cfg.ClientID)
+	slog.Info("starting stream client, client_id", "client_i_d", d.cfg.ClientID)
 
 	if err := d.cli.Start(ctx); err != nil {
-		log.Printf("[dingtalk] stream client connect error: %v", err)
+		slog.Warn("stream client connect error", "err", err)
 		return err
 	}
-	log.Printf("[dingtalk] stream client connected, waiting for messages...")
+	slog.Info("stream client connected, waiting for messages...")
 
 	// 阻塞直到 ctx 被取消（Stop 被调用）
 	<-ctx.Done()
 	d.cli.Close()
-	log.Printf("[dingtalk] stream client closed")
+	slog.Info("stream client closed")
 	return nil
 }
 
@@ -75,16 +75,16 @@ func (d *DingtalkConnector) Stop() {
 
 func (d *DingtalkConnector) onMessage(ctx context.Context, data *chatbot.BotCallbackDataModel) ([]byte, error) {
 	text := data.Text.Content
-	log.Printf("[dingtalk] received message from=%s conv=%s text=%s", data.SenderStaffId, data.ConversationId, text)
+	slog.Debug("received message from= conv= text", "sender_staff_id", data.SenderStaffId, "conversation_id", data.ConversationId, "value", text)
 
 	sessionWebhook := data.SessionWebhook
 
 	replyFunc := func(reply string) error {
 		replier := chatbot.NewChatbotReplier()
-		log.Printf("[dingtalk] sending reply via SessionWebhook, len=%d", len(reply))
+		slog.Debug("sending reply via SessionWebhook, len", "value", len(reply))
 		err := replier.SimpleReplyMarkdown(ctx, sessionWebhook, []byte("回复"), []byte(reply))
 		if err != nil {
-			log.Printf("[dingtalk] reply error: %v", err)
+			slog.Warn("reply error", "err", err)
 		}
 		return err
 	}

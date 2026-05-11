@@ -4,7 +4,7 @@ import (
 	"crypto/tls"
 	"encoding/json"
 	"fmt"
-	"log"
+	"log/slog"
 	"net"
 	"net/http"
 	"net/url"
@@ -71,7 +71,7 @@ func (sc *SignalingClient) Start(serverURL string) {
 	sc.running = true
 	sc.stopCh = make(chan struct{})
 	go sc.connectLoop()
-	log.Printf("[signaling] client starting, server=%s", serverURL)
+	slog.Info("client starting, server", "value", serverURL)
 }
 
 // StartWithSecret 兼容旧接口，忽略 secret 参数
@@ -91,7 +91,7 @@ func (sc *SignalingClient) Stop() {
 	if sc.conn != nil {
 		sc.conn.Close()
 	}
-	log.Printf("[signaling] client stopped")
+	slog.Info("client stopped")
 }
 
 // IsConnected 是否已连接信令服务器
@@ -182,7 +182,7 @@ func (sc *SignalingClient) connectLoop() {
 		if err != nil {
 			attempt++
 			delay := sc.backoffDelay(attempt)
-			log.Printf("[signaling] connect error: %v, retrying in %v (attempt %d)", err, delay, attempt)
+			slog.Warn("connect error, retrying in  (attempt )", "err", err, "value", delay, "value", attempt)
 			select {
 			case <-sc.stopCh:
 				return
@@ -266,7 +266,7 @@ func (sc *SignalingClient) connect() error {
 				sc.mu.Lock()
 				if sc.conn != nil {
 					if err := sc.conn.WriteMessage(websocket.PingMessage, nil); err != nil {
-						log.Printf("[signaling] ping write failed: %v, closing connection", err)
+						slog.Warn("ping write failed, closing connection", "err", err)
 						sc.conn.Close()
 						sc.conn = nil
 						sc.mu.Unlock()
@@ -276,7 +276,7 @@ func (sc *SignalingClient) connect() error {
 				sc.mu.Unlock()
 			case <-heartbeatTicker.C:
 				if err := sc.sendMsg(SignalMessage{Type: "heartbeat"}); err != nil {
-					log.Printf("[signaling] heartbeat send failed: %v", err)
+					slog.Warn("heartbeat send failed", "err", err)
 					return
 				}
 			}
@@ -441,7 +441,7 @@ func (sc *SignalingClient) handleMessage(msg SignalMessage) {
 			OriginalType string `json:"original_type"`
 		}
 		if json.Unmarshal(msg.Data, &failData) == nil {
-			log.Printf("[signaling] delivery_failed: to=%s reason=%s type=%s", failData.To, failData.Reason, failData.OriginalType)
+			slog.Warn("delivery_failed: to= reason= type", "to", failData.To, "reason", failData.Reason, "original_type", failData.OriginalType)
 			if broadcast != nil {
 				broadcast("wan_delivery_failed", string(msg.Data))
 				notif, _ := json.Marshal(map[string]string{
@@ -453,16 +453,15 @@ func (sc *SignalingClient) handleMessage(msg SignalMessage) {
 		}
 
 	case "conversation_invite":
-		log.Printf("[signaling] received conversation_invite from=%s, dataLen=%d, data=%s",
-			msg.From, len(msg.Data), truncateLog(string(msg.Data), 500))
+		slog.Info("signaling: conversation_invite received", "from", msg.From, "dataLen", len(msg.Data))
 		// 调用 relayHandler 在本地创建对话记录，handler 内部会 broadcast a2a_conversation_request 给前端
 		if relayHandler != nil {
 			result := relayHandler(msg.From, "/conversation/invite", msg.Data)
-			log.Printf("[signaling] conversation_invite relayHandler result: %v", result)
+			slog.Info("conversation_invite relayHandler result", "value", result)
 			// 如果 relayHandler 失败，则手动 broadcast 通知前端（降级方案）
 			if resultMap, ok := result.(map[string]interface{}); ok {
 				if errMsg, hasErr := resultMap["error"]; hasErr {
-					log.Printf("[signaling] ERROR: conversation_invite handler failed: %v", errMsg)
+					slog.Warn("ERROR: conversation_invite handler failed", "err", errMsg)
 					if broadcast != nil {
 						payload := make(map[string]interface{})
 						json.Unmarshal(msg.Data, &payload)
@@ -473,7 +472,7 @@ func (sc *SignalingClient) handleMessage(msg SignalMessage) {
 				}
 			}
 		} else {
-			log.Printf("[signaling] ERROR: relayHandler is nil for conversation_invite!")
+			slog.Warn("ERROR: relayHandler is nil for conversation_invite!")
 			if broadcast != nil {
 				payload := make(map[string]interface{})
 				json.Unmarshal(msg.Data, &payload)
@@ -484,21 +483,21 @@ func (sc *SignalingClient) handleMessage(msg SignalMessage) {
 		}
 
 	case "conversation_accept":
-		log.Printf("[signaling] received conversation_accept from=%s, dataLen=%d", msg.From, len(msg.Data))
+		slog.Debug("received conversation_accept from=, dataLen", "from", msg.From, "data)", len(msg.Data))
 		if relayHandler != nil {
 			result := relayHandler(msg.From, "/conversation/accept", msg.Data)
-			log.Printf("[signaling] conversation_accept relayHandler result: %v", result)
+			slog.Info("conversation_accept relayHandler result", "value", result)
 		} else {
-			log.Printf("[signaling] ERROR: relayHandler is nil for conversation_accept!")
+			slog.Warn("ERROR: relayHandler is nil for conversation_accept!")
 		}
 
 	case "conversation_reject":
-		log.Printf("[signaling] received conversation_reject from=%s, dataLen=%d", msg.From, len(msg.Data))
+		slog.Debug("received conversation_reject from=, dataLen", "from", msg.From, "data)", len(msg.Data))
 		if relayHandler != nil {
 			result := relayHandler(msg.From, "/conversation/reject", msg.Data)
-			log.Printf("[signaling] conversation_reject relayHandler result: %v", result)
+			slog.Warn("conversation_reject relayHandler result", "value", result)
 		} else {
-			log.Printf("[signaling] ERROR: relayHandler is nil for conversation_reject!")
+			slog.Warn("ERROR: relayHandler is nil for conversation_reject!")
 		}
 
 	case "relay":
@@ -523,11 +522,11 @@ func (sc *SignalingClient) handleRelayMessage(msg SignalMessage) {
 		Payload json.RawMessage `json:"payload"`
 	}
 	if err := json.Unmarshal(msg.Data, &relayData); err != nil {
-		log.Printf("[signaling] handleRelayMessage: unmarshal error: %v, dataLen=%d", err, len(msg.Data))
+		slog.Warn("handleRelayMessage: unmarshal error, dataLen", "err", err, "data)", len(msg.Data))
 		return
 	}
 
-	log.Printf("[signaling] relay from=%s path=%s payloadLen=%d", msg.From, relayData.Path, len(relayData.Payload))
+	slog.Debug("relay from= path= payloadLen", "from", msg.From, "path", relayData.Path, "payload)", len(relayData.Payload))
 
 	if relayHandler != nil {
 		response := relayHandler(msg.From, relayData.Path, relayData.Payload)
@@ -543,7 +542,7 @@ func (sc *SignalingClient) handleRelayMessage(msg SignalMessage) {
 			})
 		}
 	} else {
-		log.Printf("[signaling] WARNING: relayHandler is nil, cannot process relay message")
+		slog.Info("WARNING: relayHandler is nil, cannot process relay message")
 	}
 }
 

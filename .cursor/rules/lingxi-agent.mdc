@@ -29,22 +29,28 @@ cd /tmp/lingxi-singaling-server && git add -A && git commit -m "描述变更" &&
 ```
 Render 部署（wss://lingxi-singaling-server.onrender.com）会自动拉取最新代码重新部署。
 
-### 3. 开发完成后的强制流程
+### 3. 开发完成后的强制流程（每次改造后必须执行）
 
-每次需求开发完成后，必须按顺序执行以下步骤：
+**每次需求开发完成后，必须按顺序执行以下全部步骤，不可跳过：**
 
-1. **打包**
+1. **更新项目文档**
+   - 更新 `.cursor/rules/lingxi-agent.mdc`（如有架构/规范变更）
+   - 更新 `CLAUDE.md`（如有新增模块、技术栈变更、开发流程变更）
+   - 更新 `README.md`（如有新增用户可见功能、快捷键、配置项等）
+
+2. **打包编译**
    ```bash
    # 构建（需确保 Node.js >= 20.19 或 >= 22.12）
    export PATH="/tmp/node22/bin:$PATH"  # 如系统 node 版本不够
    cd <project-root> && ./build-desktop.sh
    ```
-   构建产物在 `dist-electron/` 目录，手动分发安装包。
+   构建产物在 `dist-electron/` 目录。
 
-2. **更新项目文档**
-   - 更新 `.cursor/rules/lingxi-agent.mdc`（如有架构/规范变更）
-   - 更新 `CLAUDE.md`（如有新增模块、技术栈变更、开发流程变更）
-   - 更新 `README.md`（如有新增用户可见功能、快捷键、配置项等）
+3. **安装验证**
+   - macOS：打开 `dist-electron/mac-arm64/灵犀.app` 或安装 `.dmg`
+   - 确认新功能可正常使用
+
+**⚠️ 此流程为强制性规定，任何代码变更（无论大小）完成后都必须执行打包→安装，确保交付物始终可用。**
 
 ---
 
@@ -126,7 +132,9 @@ src/
 ├── main.jsx              # 入口
 ├── index.css             # Tailwind 基础 + 主题 CSS 变量
 ├── api/client.js         # API 请求封装
-├── state/useStore.js     # Zustand 全局状态
+├── state/
+│   ├── useStore.js       # Zustand 全局状态（组合多切片）
+│   └── slices/           # 状态切片（authSlice/uiSlice/sessionSlice/chatSlice/nexusSlice）
 ├── ui/                   # 通用 UI 组件
 │   ├── AppShell.jsx      # 主布局壳（顶部导航：主导航5项 + 辅助导航5项，无代码空间）
 │   ├── primitives.jsx    # 原子组件
@@ -190,18 +198,28 @@ src/
 backend-desktop/
 ├── main.go              # 入口 + 路由注册
 ├── config/config.go     # 配置
+├── logger/logger.go     # 结构化日志（slog JSON + LOG_LEVEL）
 ├── db/
-│   ├── db.go            # 数据库初始化 + CRUD
+│   ├── db.go            # 数据库初始化 + 迁移（schema_version 版本化）
+│   ├── session.go       # 会话/任务/挂起任务 CRUD
+│   ├── knowledge.go     # 知识库/分类 CRUD
+│   ├── provider.go      # Provider/APIProfile CRUD
+│   ├── usage.go         # 用量记录/配额 CRUD
+│   ├── scheduled.go     # 定时任务 CRUD
+│   ├── auth.go          # 用户/OAuth 配置 CRUD
+│   ├── im_connector.go  # IM 连接器 CRUD
+│   ├── evolution.go     # 自我进化日志 CRUD + InsertMemory
 │   ├── nexus.go         # Nexus 表 CRUD（peers/contacts/a2a）
 │   └── mcp_agent.go     # MCP-Agent 关联
 ├── handler/             # HTTP Handler
-│   ├── agent.go         # 智能体 CRUD
+│   ├── agent.go         # 智能体 CRUD（含 API 缓存）
+│   ├── cache.go         # TTL 缓存（sync.RWMutex，30s TTL）
 │   ├── chat.go          # 对话 + 流式 WebSocket
 │   ├── knowledge.go     # 知识库（支持 PDF/DOCX）
 │   ├── mcp.go           # MCP 管理
-│   ├── provider.go      # 模型接入点管理
+│   ├── provider.go      # 模型接入点管理（含 API 缓存）
 │   ├── session.go       # 会话 + 消息搜索
-│   ├── skill.go         # 技能管理
+│   ├── skill.go         # 技能管理（含 API 缓存 + 增强导出）
 │   ├── usage.go         # 用量统计
 │   ├── im_connector.go  # IM 连接器
 │   ├── scheduled.go     # 定时任务 CRUD
@@ -209,6 +227,10 @@ backend-desktop/
 │   ├── nexus.go         # Nexus 对外 API + 设置 + WAN 状态
 │   ├── a2a_conversation.go # A2A 对话管理（邀请/接受/拒绝/消息收发）
 │   ├── agent_nexus_config.go # Agent 对外设置 CRUD
+│   ├── evolution.go     # 自我进化引擎 + API
+│   ├── backup.go        # 数据库备份（VACUUM INTO + 导出）
+│   ├── health.go        # 结构化健康检查
+│   ├── middleware.go    # CORS + Body Size + Rate Limiter
 │   ├── router_status.go # 路由状态
 │   ├── tasks.go         # 后台任务管理
 │   ├── memory.go        # 长期记忆 CRUD + 消息固定
@@ -371,6 +393,12 @@ PORT=3099 DB_PATH=/tmp/lingxi-instance2/smart-agent.db FRONTEND_DIST=../frontend
 - [x] SSO 登录页（微信/QQ/Google/钉钉/抖音 + 游客登录，Electron Loopback OAuth）
 - [x] 登录状态管理（useStore authChecked/currentUser + AppShell 登录判断）
 - [x] 广域网设置 UI（NexusSettingsPage：启用 WAN/信令服务器地址/签名密钥）
+- [x] Zustand 模块化切片（authSlice/uiSlice/sessionSlice/chatSlice/nexusSlice）
+- [x] React.lazy 懒加载（非默认页组件按需加载，减小首屏 bundle）
+- [x] Modal 焦点陷阱（Tab 循环 + Escape 关闭 + ARIA 属性）
+- [x] WS 流式 token 50ms 缓冲刷新（减少高频 set() 触发的 React 重渲染）
+- [x] 自我进化 UI（Agent 编辑器内进化开关 + 进化日志查看/清空 + 消息气泡「提取知识」按钮）
+- [x] 自我进化全面重做（实时进度面板 + 对话内联通知 + 撤销能力 + 进化历程页筛选/搜索/可读卡片 + 提取按钮增强 + 会话级提取建议）
 
 ### 后端
 - [x] 知识库支持 PDF/DOCX 格式
@@ -406,6 +434,18 @@ PORT=3099 DB_PATH=/tmp/lingxi-instance2/smart-agent.db FRONTEND_DIST=../frontend
 - [x] 广域网信令客户端（WebSocket + HMAC 签名 + WSS 支持）
 - [x] Transport 抽象层（LANTransport + WANTransport + 信令中继）
 - [x] 广域网 API（GET /api/wan/peers, GET /api/wan/status）
+- [x] 结构化日志（log/slog JSON 格式，LOG_LEVEL 环境变量配置）
+- [x] 安全加固（WebSocket Origin 校验 + CORS 中间件 + Body Size 限制 + Rate Limiter）
+- [x] 优雅关闭（os.Signal 捕获 + context.WithTimeout + scheduler/nexus/backup 停止）
+- [x] API 缓存（TTL 30s sync.RWMutex 缓存 ListProviders/ListAgents/ListSkills + 变更自动失效）
+- [x] SQLite 连接池（SetMaxOpenConns(4) + WAL 并发读）
+- [x] 数据库备份（每日 VACUUM INTO + 7 天自动清理 + GET /api/backup/export 手动导出）
+- [x] 结构化健康检查（GET /api/health：db/goroutines/mem/uptime/go_version）
+- [x] 数据库迁移版本化（schema_version 表 + 编号迁移系统）
+- [x] 技能增强导出（folder→zip 动态打包 + manifest.json + POST /api/skills/batch-export 批量导出）
+- [x] 自我进化引擎（负反馈/手动触发 → LLM 分析 → 自动写入记忆/知识库 + evolution_logs 审计）
+- [x] 自我进化引擎增强（更宽松的自动触发：用户纠正/有价值对话/工具修复 + 细粒度进度广播 + 撤销 API + 健壮 JSON 解析）
+- [x] db 模块化拆分（session.go/knowledge.go/provider.go/usage.go/scheduled.go/auth.go/evolution.go）
 
 ### Agent 间对话（Project Nexus）
 - [x] 局域网 mDNS 自动发现（_lingxi._tcp 服务广播 + 10s 扫描）

@@ -11,11 +11,16 @@ import (
 
 // ListAgents GET /api/agents
 func ListAgents(c *gin.Context) {
+	if cached, ok := apiCache.Get("agents"); ok {
+		c.JSON(http.StatusOK, cached)
+		return
+	}
 	list, err := db.ListAgents()
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
+	apiCache.Set("agents", list)
 	c.JSON(http.StatusOK, list)
 }
 
@@ -58,6 +63,7 @@ func UpsertAgent(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
+	apiCache.Invalidate("agents")
 	BroadcastEvent("agent_changed", map[string]any{"id": id})
 	c.JSON(http.StatusOK, gin.H{"id": id})
 }
@@ -69,6 +75,7 @@ func DeleteAgent(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
+	apiCache.Invalidate("agents")
 	BroadcastEvent("agent_changed", map[string]any{"id": id, "deleted": true})
 	c.JSON(http.StatusOK, gin.H{"ok": true})
 }
