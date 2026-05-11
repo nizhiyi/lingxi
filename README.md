@@ -599,6 +599,18 @@ cd electron && npm install && npm start
 
 ---
 
+## ☕ 打赏支持
+
+> 开源不易，如果灵犀对你有帮助，欢迎请作者喝杯咖啡。你的支持是项目持续迭代的最大动力。
+
+<p align="center">
+  <img src="images/打赏.png" alt="微信打赏" width="300" />
+  <br/><br/>
+  <sub>微信扫一扫，随意打赏 · 感谢每一份支持</sub>
+</p>
+
+---
+
 <p align="center">
   <br/>
   <img src="logo.jpg" width="48" alt="灵犀" />

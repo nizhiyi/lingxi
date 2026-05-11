@@ -599,6 +599,18 @@ See [LICENSE](LICENSE) for details. For commercial licensing, contact the copyri
 
 ---
 
+## ☕ Support the Project
+
+> Open source is hard work. If Lingxi helps you, consider buying the author a coffee. Your support keeps the project alive and evolving.
+
+<p align="center">
+  <img src="images/打赏.png" alt="WeChat Pay" width="300" />
+  <br/><br/>
+  <sub>Scan with WeChat to donate · Every bit of support is appreciated</sub>
+</p>
+
+---
+
 <p align="center">
   <br/>
   <img src="logo.jpg" width="48" alt="Lingxi" />
