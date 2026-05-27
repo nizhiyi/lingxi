@@ -2244,7 +2244,7 @@ func buildClaudeEnv(cfg *config.Config) []string {
 	}
 
 	// 优先使用激活档案（运行时由 Electron 下发到内存）
-	rtID, rtName, rtModel, rtBaseURL, rtToken, rtProtocol, rtTransformer := activeProfileSnapshot()
+	rtID, rtName, rtModel, rtBaseURL, rtToken, rtProtocol, rtTransformer, _, _ := activeProfileSnapshot()
 	authToken := rtToken
 	baseURL := rtBaseURL
 	modelEnv := rtModel

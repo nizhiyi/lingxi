@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"strconv"
+	"strings"
 
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
@@ -102,16 +103,7 @@ func CreateGroupChat(c *gin.Context) {
 	}
 
 	// 向远端成员发送邀请
-	memberList := []map[string]interface{}{}
-	allMembers, _ := db.ListGroupMembers(roomID)
-	for _, mem := range allMembers {
-		memberList = append(memberList, map[string]interface{}{
-			"peer_id":       mem.PeerID,
-			"peer_nickname": mem.PeerNickname,
-			"agent_name":    mem.AgentName,
-			"is_local":      mem.IsLocal,
-		})
-	}
+	memberList := buildGroupInviteMemberMaps(roomID)
 
 	uniquePeers := map[string]bool{}
 	for _, m := range body.RemoteMembers {
@@ -374,6 +366,169 @@ func DeleteGroupChatHandler(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"ok": true})
 }
 
+// InviteGroupMembers POST /api/group-chats/:id/members/add — 仅群主：增员（本端 Agent + 远端 Peer 邀请）
+func InviteGroupMembers(c *gin.Context) {
+	id, _ := strconv.ParseInt(c.Param("id"), 10, 64)
+	var body struct {
+		LocalAgentIDs []int64 `json:"local_agent_ids"`
+		RemoteMembers []struct {
+			PeerID       string `json:"peer_id"`
+			PeerNickname string `json:"peer_nickname"`
+			AgentName    string `json:"agent_name"`
+		} `json:"remote_members"`
+	}
+	if err := c.ShouldBindJSON(&body); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	room, err := db.GetGroupChat(id)
+	if err != nil || room == nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "群聊不存在"})
+		return
+	}
+	myInstanceID := nexus.Global.InstanceID()
+	if !isGroupRoomHost(room, myInstanceID) {
+		c.JSON(http.StatusForbidden, gin.H{"error": "仅群主可增减成员"})
+		return
+	}
+	if room.Status != "active" && room.Status != "paused" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "当前群聊状态不可变更成员"})
+		return
+	}
+	settings, _ := db.GetNexusSettings()
+	myNickname := settings.Nickname
+	if myNickname == "" {
+		myNickname = "灵犀用户"
+	}
+
+	listMembers := func() []db.GroupMember {
+		ms, _ := db.ListGroupMembers(id)
+		return ms
+	}
+	findMember := func(ms []db.GroupMember, peerID, agentName string) bool {
+		for _, m := range ms {
+			if m.PeerID == peerID && m.AgentName == agentName {
+				return true
+			}
+		}
+		return false
+	}
+
+	addedLocal := false
+	ms := listMembers()
+	for _, aid := range body.LocalAgentIDs {
+		if aid <= 0 {
+			continue
+		}
+		agent, _ := db.GetAgent(aid)
+		if agent == nil {
+			continue
+		}
+		if findMember(ms, myInstanceID, agent.Name) {
+			continue
+		}
+		if _, err := db.AddGroupMember(&db.GroupMember{
+			RoomID:       id,
+			PeerID:       myInstanceID,
+			PeerNickname: myNickname,
+			AgentID:      aid,
+			AgentName:    agent.Name,
+			IsLocal:      true,
+			Status:       "joined",
+		}); err != nil {
+			continue
+		}
+		addedLocal = true
+		ms = listMembers()
+	}
+	if addedLocal {
+		grouploop.BootRoom(id, false)
+	}
+
+	peersNeedingInvite := map[string]struct{}{}
+	ms = listMembers()
+	for _, m := range body.RemoteMembers {
+		pid := strings.TrimSpace(m.PeerID)
+		an := strings.TrimSpace(m.AgentName)
+		if pid == "" || an == "" {
+			continue
+		}
+		if findMember(ms, pid, an) {
+			continue
+		}
+		if _, err := db.AddGroupMember(&db.GroupMember{
+			RoomID:       id,
+			PeerID:       pid,
+			PeerNickname: m.PeerNickname,
+			AgentName:    an,
+			IsLocal:      false,
+			Status:       "invited",
+		}); err != nil {
+			continue
+		}
+		ms = listMembers()
+		peersNeedingInvite[pid] = struct{}{}
+	}
+
+	memberList := buildGroupInviteMemberMaps(id)
+	for peerID := range peersNeedingInvite {
+		payload := map[string]interface{}{
+			"room_uuid":     room.RoomUUID,
+			"host_peer_id":  room.HostPeerID,
+			"host_nickname": myNickname,
+			"topic":         room.Topic,
+			"goal":          room.Goal,
+			"members":       memberList,
+		}
+		if err := nexus.SendGroupInvite(peerID, payload); err != nil {
+			saveSystemGroupMessage(id, fmt.Sprintf("无法向远端发送增员邀请: %v", err))
+		}
+	}
+
+	pushGroupMembersSync(id)
+	c.JSON(http.StatusOK, gin.H{"ok": true})
+}
+
+// KickGroupMemberFromRoom POST /api/group-chats/:id/members/remove — 仅群主移除某 Agent
+func KickGroupMemberFromRoom(c *gin.Context) {
+	id, _ := strconv.ParseInt(c.Param("id"), 10, 64)
+	var body struct {
+		PeerID    string `json:"peer_id"`
+		AgentName string `json:"agent_name"`
+	}
+	if err := c.ShouldBindJSON(&body); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	body.PeerID = strings.TrimSpace(body.PeerID)
+	body.AgentName = strings.TrimSpace(body.AgentName)
+	if body.PeerID == "" || body.AgentName == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "peer_id 与 agent_name 不能为空"})
+		return
+	}
+
+	room, err := db.GetGroupChat(id)
+	if err != nil || room == nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "群聊不存在"})
+		return
+	}
+	myInstanceID := nexus.Global.InstanceID()
+	if !isGroupRoomHost(room, myInstanceID) {
+		c.JSON(http.StatusForbidden, gin.H{"error": "仅群主可移除成员"})
+		return
+	}
+	if err := db.RemoveGroupMember(id, body.PeerID, body.AgentName); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	if body.PeerID == myInstanceID {
+		grouploop.BootRoom(id, false)
+	}
+	pushGroupMembersSync(id)
+	c.JSON(http.StatusOK, gin.H{"ok": true})
+}
+
 // AcceptGroupInvite POST /api/group-chats/:id/accept — 接受邀请并把本端 Agent 加入
 func AcceptGroupInvite(c *gin.Context) {
 	id, _ := strconv.ParseInt(c.Param("id"), 10, 64)
@@ -467,9 +622,25 @@ func NexusReceiveGroupInvite(c *gin.Context) {
 		return
 	}
 
-	// 检查是否已经收到过这个邀请
+	// 检查是否已经收到过同一个 room_uuid：若已存在则应用成员快照（群主增员 / 重发邀请）
 	existing, _ := db.GetGroupChatByUUID(body.RoomUUID)
 	if existing != nil {
+		if existing.Status == "completed" {
+			c.JSON(http.StatusOK, gin.H{"ok": true})
+			return
+		}
+		rows := wireRowsFromInviteMaps(body.Members)
+		if len(rows) == 0 {
+			c.JSON(http.StatusOK, gin.H{"ok": true})
+			return
+		}
+		myID := nexus.Global.InstanceID()
+		if err := db.ReplaceGroupMembersForSync(existing.ID, myID, rows); err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			return
+		}
+		grouploop.BootRoom(existing.ID, false)
+		BroadcastWSEvent("group_members_sync", fmt.Sprintf(`{"room_id":%d}`, existing.ID))
 		c.JSON(http.StatusOK, gin.H{"ok": true})
 		return
 	}
@@ -486,32 +657,22 @@ func NexusReceiveGroupInvite(c *gin.Context) {
 		HostPeerID:      body.HostPeerID,
 		CreatedByLocal:  false,
 	}
+	if room.ScheduleMode == "" {
+		room.ScheduleMode = "free"
+	}
 	roomID, err := db.CreateGroupChat(room)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
 
-	// 落库其他成员（含群主）
-	for _, m := range body.Members {
-		peerID, _ := m["peer_id"].(string)
-		peerNick, _ := m["peer_nickname"].(string)
-		agentName, _ := m["agent_name"].(string)
-		isLocalRaw, _ := m["is_local"].(bool)
-		// 注意：host 视角的 is_local 是相对 host 的；从我们这里看，他们都是远端
-		_ = isLocalRaw
-		status := "joined"
-		if peerID == "" || agentName == "" {
-			continue
+	rows := wireRowsFromInviteMaps(body.Members)
+	myID := nexus.Global.InstanceID()
+	if len(rows) > 0 {
+		if err := db.ReplaceGroupMembersForSync(roomID, myID, rows); err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			return
 		}
-		db.AddGroupMember(&db.GroupMember{
-			RoomID:       roomID,
-			PeerID:       peerID,
-			PeerNickname: peerNick,
-			AgentName:    agentName,
-			IsLocal:      false,
-			Status:       status,
-		})
 	}
 
 	// WS 通知前端：弹出邀请卡片
@@ -569,6 +730,9 @@ func NexusReceiveGroupJoinAck(c *gin.Context) {
 
 	BroadcastWSEvent("group_member_joined", fmt.Sprintf(`{"room_id":%d,"peer_id":"%s","agent_name":"%s","reject":%v}`,
 		room.ID, body.PeerID, body.AgentName, body.Reject))
+	if room.CreatedByLocal {
+		pushGroupMembersSync(room.ID)
+	}
 	c.JSON(http.StatusOK, gin.H{"ok": true})
 }
 
@@ -746,7 +910,121 @@ func NexusReceiveGroupStreamToken(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"ok": true})
 }
 
+// NexusReceiveGroupMemberSync POST /api/nexus/group/member_sync — 宿主推送成员全量快照
+func NexusReceiveGroupMemberSync(c *gin.Context) {
+	var body struct {
+		RoomUUID string                  `json:"room_uuid"`
+		Members  []db.GroupMemberSyncRow `json:"members"`
+	}
+	if err := c.ShouldBindJSON(&body); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	room, err := db.GetGroupChatByUUID(body.RoomUUID)
+	if err != nil || room == nil {
+		c.JSON(http.StatusOK, gin.H{"ok": true})
+		return
+	}
+	myID := nexus.Global.InstanceID()
+	if err := db.ReplaceGroupMembersForSync(room.ID, myID, body.Members); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	grouploop.BootRoom(room.ID, false)
+	BroadcastWSEvent("group_members_sync", fmt.Sprintf(`{"room_id":%d}`, room.ID))
+	c.JSON(http.StatusOK, gin.H{"ok": true})
+}
+
 // ─── 辅助 ─────────────────────────────────────────────────────────
+
+func isGroupRoomHost(room *db.GroupChat, myPeer string) bool {
+	return room != nil && room.CreatedByLocal && room.HostPeerID == myPeer && myPeer != ""
+}
+
+func parseJSONNumberInt64(v interface{}) int64 {
+	switch x := v.(type) {
+	case float64:
+		return int64(x)
+	case int64:
+		return x
+	case int:
+		return int64(x)
+	default:
+		return 0
+	}
+}
+
+func buildGroupInviteMemberMaps(roomID int64) []map[string]interface{} {
+	allMembers, err := db.ListGroupMembers(roomID)
+	if err != nil {
+		return nil
+	}
+	memberList := make([]map[string]interface{}, 0, len(allMembers))
+	for _, mem := range allMembers {
+		caps := mem.AgentCaps
+		if caps == "" {
+			caps = "[]"
+		}
+		st := mem.Status
+		if st == "" {
+			st = "joined"
+		}
+		memberList = append(memberList, map[string]interface{}{
+			"peer_id":       mem.PeerID,
+			"peer_nickname": mem.PeerNickname,
+			"agent_name":    mem.AgentName,
+			"agent_id":      mem.AgentID,
+			"agent_caps":    caps,
+			"status":        st,
+			"is_local":      mem.IsLocal,
+		})
+	}
+	return memberList
+}
+
+func wireRowsFromInviteMaps(members []map[string]interface{}) []db.GroupMemberSyncRow {
+	out := make([]db.GroupMemberSyncRow, 0, len(members))
+	for _, m := range members {
+		peerID, _ := m["peer_id"].(string)
+		nick, _ := m["peer_nickname"].(string)
+		name, _ := m["agent_name"].(string)
+		if peerID == "" || name == "" {
+			continue
+		}
+		caps, _ := m["agent_caps"].(string)
+		if caps == "" {
+			caps = "[]"
+		}
+		st, _ := m["status"].(string)
+		if st == "" {
+			st = "joined"
+		}
+		aid := parseJSONNumberInt64(m["agent_id"])
+		out = append(out, db.GroupMemberSyncRow{
+			PeerID:       peerID,
+			PeerNickname: nick,
+			AgentName:    name,
+			AgentID:      aid,
+			AgentCaps:    caps,
+			Status:       st,
+		})
+	}
+	return out
+}
+
+func pushGroupMembersSync(roomID int64) {
+	room, err := db.GetGroupChat(roomID)
+	if err != nil || room == nil || room.HostPeerID != nexus.Global.InstanceID() || !room.CreatedByLocal {
+		return
+	}
+	rows := wireRowsFromInviteMaps(buildGroupInviteMemberMaps(roomID))
+	payload := map[string]interface{}{
+		"room_uuid": room.RoomUUID,
+		"members":   rows,
+	}
+	nexus.BroadcastGroupMessage(roomID, "/group/member_sync", payload)
+	BroadcastWSEvent("group_members_sync", fmt.Sprintf(`{"room_id":%d}`, roomID))
+}
 
 func saveSystemGroupMessage(roomID int64, content string) {
 	msg := &db.GroupMessage{

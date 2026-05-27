@@ -251,7 +251,8 @@ backend-desktop/
 │   ├── lan_transport.go # 局域网 HTTP 直连传输
 │   ├── wan_transport.go # 广域网传输（信令中继）
 │   └── signaling.go     # 信令客户端（无 HMAC，支持 conversation_invite/accept/reject）
-├── router/              # AI 引擎路由
+├── proxy/               # 纯 Go 协议转换代理（Anthropic ↔ OpenAI，替代 LiteLLM）
+├── router/              # AI 引擎路由（Go 代理管理 + OpenAI 协议桥接）
 ├── scheduler/           # 定时任务调度器（已修复时区 BUG + 启动自检 + WS 流式广播）
 ├── evolution/           # 全局自我进化扫描器（定时巡检 + 安静时段 + 冷却）
 ├── vectordb/            # 向量数据库（纯 Go cosine + 分块 + 嵌入 + 混合检索）
@@ -289,7 +290,7 @@ backend-desktop/
 2. `go build` 编译 Go 后端 → `smart-agent`（macOS arm64 + Windows amd64）
 3. `npm run build` 构建前端 → `dist/`
 4. 复制 AI 引擎（Claude CLI）到 `electron/resources/ai-engine/`
-5. 安装 Bridge 路由层（llm-bridge + litellm）
+5. Go 协议转换代理已内置于后端（无需外部安装步骤）
 6. 复制 Node.js 运行时到 `electron/resources/node-bin/`
 7. `electron-builder` 打包（macOS + Windows）
 
@@ -422,7 +423,7 @@ PORT=3099 DB_PATH=/tmp/lingxi-instance2/smart-agent.db FRONTEND_DIST=../frontend
 - [x] 技能在线编辑/导出 API
 - [x] Smithery.ai 市场代理 API（搜索/分类/详情/安装）
 - [x] 智能体 temperature / max_tokens 参数
-- [x] OpenAI reasoning token 透传（bridge 层拦截并生成 Anthropic thinking 事件）
+- [x] OpenAI reasoning token 透传（Go 代理自动处理 Anthropic thinking 事件）
 - [x] 定时任务调度器（scheduled_tasks + scheduled_task_runs 表，15 秒检查间隔，Go 侧时间比较）
 - [x] 定时任务 CRUD + 手动触发 + 桌面通知（WS desktop_notify 事件）
 - [x] 防死循环保护（禁止 Cursor 专有工具 + isNonExistentTool 检测）
@@ -557,6 +558,14 @@ PORT=3099 DB_PATH=/tmp/lingxi-instance2/smart-agent.db FRONTEND_DIST=../frontend
 ### 平台
 - [x] IM 集成（企业微信/钉钉/飞书）
 - [x] MCP 工具管理
+- [x] **纯 Go 协议转换代理**（`backend-desktop/proxy/`：Anthropic ↔ OpenAI 双向转换，流式/非流式/Tool use/思考链/多模态，零启动延迟、零外部依赖，替代 Python LiteLLM）
+- [x] **Go 代理预启动**（激活 OpenAI 协议接入点时自动预启动代理，< 1ms 就绪）
+- [x] **自动获取可用模型列表**（POST /api/api-profiles/fetch-models，输入 API key 后查询供应商 /models 端点返回可用模型）
+- [x] **供应商预设配置**（内置 DeepSeek/Qwen/GLM/Moonshot/Doubao 等 base_url 和推荐模型列表，减少配置错误）
+- [x] **cc-haha Provider 架构优化**（新增 GLM/Kimi/MiniMax/Ollama/LMStudio Anthropic 直连、模型上下文窗口管理、auth_strategy 认证策略、provider 特定 env 变量、两阶段 provider 测试）
+- [x] **定时任务页面重构**（渐变 Hero + 4 格统计 + 任务卡片增强 + 时间线执行记录）
+- [x] **用量统计增强**（费用趋势折线图 + 按智能体聚合 + GroupUsageByAgent API + 双列布局）
+- [x] **Screen Agent 浏览器控制入口**（面板新增 Browser 模式 tab + Playwright MCP 就绪状态 + 快捷操作）
 - [x] 技能管理（AI 生成/ZIP 导入/批量上传/在线编辑/导出/市场安装）
 - [x] Windows 构建支持（NSIS + Portable）
 - [x] 冷启动优化（Splash 页立即显示，后端就绪后无缝切换）

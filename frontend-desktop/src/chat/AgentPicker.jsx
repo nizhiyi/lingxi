@@ -1,5 +1,6 @@
 import { Lock } from 'lucide-react';
 import { useStore } from '../state/useStore';
+import AgentAvatar from '../ui/AgentAvatar';
 
 // 会话级智能体显示（只读）
 // 设计：会话创建时绑定一个智能体，全程不允许更改。
@@ -19,9 +20,7 @@ export function AgentBadge() {
 
   return (
     <div className="inline-flex items-center gap-2 px-3 py-1.5 rounded-full bg-[color:var(--bg-elev)] border border-[color:var(--line)] text-sm select-none">
-      <span className="w-6 h-6 rounded-lg bg-gradient-to-br from-[color:var(--accent-soft)] to-transparent text-[color:var(--accent)] flex items-center justify-center text-sm">
-        {agent.avatar || '✦'}
-      </span>
+      <AgentAvatar avatar={agent.avatar} name={agent.name} size={24} />
       <span className="font-medium">{agent.name}</span>
       <Lock size={11} className="text-[color:var(--text-faint)]" />
       <span className="text-[11px] text-[color:var(--text-faint)]">本会话锁定</span>
@@ -31,4 +30,3 @@ export function AgentBadge() {
 
 // 兼容旧引用
 export const AgentPicker = AgentBadge;
-

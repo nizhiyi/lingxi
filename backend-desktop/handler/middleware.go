@@ -17,7 +17,10 @@ func LocalOriginCORS() gin.HandlerFunc {
 			strings.HasPrefix(origin, "http://localhost:") ||
 			strings.HasPrefix(origin, "http://127.0.0.1:") ||
 			origin == "file://" ||
-			strings.HasPrefix(origin, "app://")
+			strings.HasPrefix(origin, "app://") ||
+			strings.HasPrefix(origin, "http://10.") ||
+			strings.HasPrefix(origin, "http://172.") ||
+			strings.HasPrefix(origin, "http://192.168.")
 
 		if allowed && origin != "" {
 			c.Header("Access-Control-Allow-Origin", origin)

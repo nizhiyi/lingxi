@@ -198,14 +198,7 @@ func RunGroupAgentTurn(systemPrompt, userMessage string, agentID int64, forwarde
 				if inner.ContentBlock.Type == "tool_use" {
 					toolName := inner.ContentBlock.Name
 					if !isAskUserTool(toolName) {
-						payload, _ := json.Marshal(map[string]any{
-							"id":    inner.ContentBlock.ID,
-							"name":  toolName,
-							"label": toolDisplayLabel(toolName),
-						})
-						if forwarder != nil {
-							forwarder("tool_start", string(payload))
-						}
+						// 群聊流式只推正文，不向 UI 广播技能/工具过程
 					}
 					blocks = append(blocks, msgBlock{
 						Type:  "tool",
@@ -256,17 +249,7 @@ func RunGroupAgentTurn(systemPrompt, userMessage string, agentID int64, forwarde
 							last.Input = summary
 							last.Ms = elapsed
 							last.Status = "ok"
-							endPayload, _ := json.Marshal(map[string]any{
-								"done":   true,
-								"name":   last.Name,
-								"label":  last.Label,
-								"input":  summary,
-								"ms":     elapsed,
-								"status": "ok",
-							})
-							if forwarder != nil {
-								forwarder("tool_end", string(endPayload))
-							}
+							// 不在群聊流式中推送 tool_end
 						}
 					}
 				}
@@ -281,24 +264,20 @@ func RunGroupAgentTurn(systemPrompt, userMessage string, agentID int64, forwarde
 	}
 
 	plain := strings.TrimSpace(textBuf.String())
-	if plain == "" && len(blocks) == 0 {
-		return GroupTurnResult{Skipped: true}, nil
-	}
 
 	filtered := make([]msgBlock, 0, len(blocks))
 	for i := range blocks {
-		if blocks[i].Type == "thinking" {
+		if blocks[i].Type == "thinking" || blocks[i].Type == "tool" {
 			continue
 		}
-		if blocks[i].Type == "tool" {
-			blocks[i].Done = true
-			blocks[i].Text = ""
-		} else {
-			blocks[i].Text = redactSensitive(blocks[i].Text)
-		}
+		blocks[i].Text = redactSensitive(blocks[i].Text)
 		filtered = append(filtered, blocks[i])
 	}
 	blocks = filtered
+
+	if plain == "" && len(blocks) == 0 {
+		return GroupTurnResult{Skipped: true}, nil
+	}
 
 	blocksJSON := ""
 	if bj, err := json.Marshal(blocks); err == nil {

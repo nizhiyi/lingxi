@@ -361,6 +361,76 @@ function normalizeToolResultsForOpenAI(universal) {
   return universal
 }
 
+// ─── OpenAI 请求体后处理（修正 llm-bridge 转换遗留问题）─────────
+// llm-bridge fromUniversal('openai') 有时生成不规范的 OpenAI 格式：
+// - role=tool 的 content 可能是 array 而非 string
+// - tool_call_id 可能缺失
+// - assistant 消息 tool_calls 的 arguments 可能是 object 而非 JSON string
+// 这些问题会导致 DashScope/DeepSeek 等 API 返回 400 错误
+function fixOpenAIBody(body) {
+  if (!body?.messages) return body
+
+  const toolCallMap = new Map()
+  for (const msg of body.messages) {
+    if (msg.role === 'assistant' && msg.tool_calls) {
+      for (const tc of msg.tool_calls) {
+        if (tc.id && tc.function?.name) {
+          toolCallMap.set(tc.id, tc.function.name)
+        }
+        if (tc.function && typeof tc.function.arguments !== 'string') {
+          tc.function.arguments = JSON.stringify(tc.function.arguments || {})
+        }
+      }
+    }
+  }
+
+  for (const msg of body.messages) {
+    if (msg.role === 'tool') {
+      if (Array.isArray(msg.content)) {
+        const parts = msg.content.map(p => {
+          if (typeof p === 'string') return p
+          if (p?.text) return p.text
+          if (p?.tool_result?.result) {
+            const r = p.tool_result.result
+            return typeof r === 'string' ? r : JSON.stringify(r)
+          }
+          return JSON.stringify(p)
+        })
+        msg.content = parts.join('\n')
+      } else if (typeof msg.content !== 'string') {
+        msg.content = JSON.stringify(msg.content || '')
+      }
+
+      if (!msg.tool_call_id) {
+        log(`[warn] tool message missing tool_call_id, attempting recovery`)
+        if (msg.name) {
+          for (const [id, name] of toolCallMap) {
+            if (name === msg.name) {
+              msg.tool_call_id = id
+              break
+            }
+          }
+        }
+        if (!msg.tool_call_id) {
+          msg.tool_call_id = `call_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`
+          log(`[warn] generated placeholder tool_call_id: ${msg.tool_call_id}`)
+        }
+      }
+
+      if (typeof msg.content === 'string' && msg.content.length > 30000) {
+        log(`[tool_result] post-fix truncate from ${msg.content.length} to 30000`)
+        msg.content = msg.content.slice(0, 30000) + '\n\n...[内容过长，已截断]'
+      }
+    }
+
+    if (msg.role === 'assistant' && msg.tool_calls?.length > 0) {
+      if (msg.content === undefined) msg.content = null
+    }
+  }
+
+  return body
+}
+
 // ─── 处理器 ───────────────────────────────────────────────────────
 
 async function handleConfig(req, res) {
@@ -401,6 +471,7 @@ function splitReasoningFromStream(upstreamBody) {
   const emitter = new EventEmitter()
   let hasReasoning = false
   let buffer = ''
+  let chunkCount = 0
 
   const filtered = new ReadableStream({
     async start(controller) {
@@ -411,45 +482,72 @@ function splitReasoningFromStream(upstreamBody) {
         while (true) {
           const { value, done } = await reader.read()
           if (done) {
-            // 处理缓冲区中剩余的数据
             if (buffer.trim()) {
-              processBuffer(buffer, controller, emitter, () => hasReasoning)
+              processRemainingBuffer(buffer, controller, emitter, hasReasoning)
             }
             if (hasReasoning) emitter.emit('reasoning_end')
+            log(`[stream] upstream ended after ${chunkCount} chunks`)
             controller.close()
             break
           }
 
-          buffer += decoder.decode(value, { stream: true })
+          const text = decoder.decode(value, { stream: true })
+          buffer += text
+          chunkCount++
+
+          // 检测上游 SSE 流中的错误（部分 OpenAI 兼容 API 在 SSE 流中返回 JSON 错误）
+          if (chunkCount === 1 && !text.includes('data:') && text.trim().startsWith('{')) {
+            try {
+              const errObj = JSON.parse(text.trim())
+              if (errObj.error || errObj.code || errObj.message) {
+                const errMsg = errObj.error?.message || errObj.message || JSON.stringify(errObj)
+                log(`[stream] upstream returned inline error: ${errMsg}`)
+                emitter.emit('error', errMsg)
+                controller.close()
+                return
+              }
+            } catch { /* not JSON, continue */ }
+          }
 
           // 按完整的 SSE 事件分割处理
           const lines = buffer.split('\n')
-          buffer = lines.pop() || '' // 保留最后一个不完整的行
+          buffer = lines.pop() || ''
 
           let currentEventLines = []
           for (const line of lines) {
             currentEventLines.push(line)
             if (line === '') {
-              // 空行表示一个完整的 SSE 事件结束
               const eventText = currentEventLines.join('\n') + '\n'
-              const dataLine = currentEventLines.find(l => l.startsWith('data: '))
+              const dataLine = currentEventLines.find(l => l.startsWith('data: ') || l.startsWith('data:'))
               currentEventLines = []
 
               if (!dataLine) {
-                // 非 data 行原样转发
                 controller.enqueue(new TextEncoder().encode(eventText))
                 continue
               }
 
-              const jsonStr = dataLine.slice(6)
+              const jsonStr = dataLine.replace(/^data:\s?/, '')
               if (jsonStr === '[DONE]') {
-                if (hasReasoning) emitter.emit('reasoning_end')
+                if (hasReasoning) {
+                  emitter.emit('reasoning_end')
+                  hasReasoning = false
+                }
                 controller.enqueue(new TextEncoder().encode(eventText))
                 continue
               }
 
               try {
                 const parsed = JSON.parse(jsonStr)
+
+                // 检测 SSE 流内的错误对象
+                if (parsed.error) {
+                  const errMsg = parsed.error.message || JSON.stringify(parsed.error)
+                  log(`[stream] SSE error chunk: ${errMsg}`)
+                  emitter.emit('error', errMsg)
+                  controller.enqueue(new TextEncoder().encode(eventText))
+                  continue
+                }
+
                 const delta = parsed?.choices?.[0]?.delta
                 if (!delta) {
                   controller.enqueue(new TextEncoder().encode(eventText))
@@ -461,7 +559,6 @@ function splitReasoningFromStream(upstreamBody) {
                   hasReasoning = true
                   emitter.emit('reasoning', reasoning)
 
-                  // 如果这个 chunk 同时有 content，保留 content 部分
                   if (delta.content) {
                     const cleaned = { ...parsed }
                     cleaned.choices = parsed.choices.map(c => ({
@@ -471,26 +568,23 @@ function splitReasoningFromStream(upstreamBody) {
                     const newLine = `data: ${JSON.stringify(cleaned)}\n\n`
                     controller.enqueue(new TextEncoder().encode(newLine))
                   }
-                  // 纯 reasoning chunk 不转发给 llm-bridge
                 } else {
-                  // 非 reasoning chunk 原样转发
                   if (hasReasoning && delta.content && !delta.reasoning_content && !delta.reasoning) {
-                    // reasoning 阶段结束，content 阶段开始
                     emitter.emit('reasoning_end')
                     hasReasoning = false
                   }
                   controller.enqueue(new TextEncoder().encode(eventText))
                 }
               } catch {
-                // JSON 解析失败原样转发
                 controller.enqueue(new TextEncoder().encode(eventText))
               }
             }
           }
         }
       } catch (e) {
+        log(`[stream] splitReasoning error: ${e.message}`)
         if (hasReasoning) emitter.emit('reasoning_end')
-        controller.error(e)
+        try { controller.close() } catch { /* already closed */ }
       }
     },
   })
@@ -498,10 +592,23 @@ function splitReasoningFromStream(upstreamBody) {
   return { filteredStream: filtered, reasoningEmitter: emitter }
 }
 
-function processBuffer(buf, controller, emitter, hasReasoningFn) {
+function processRemainingBuffer(buf, controller, emitter, hasReasoning) {
   const encoder = new TextEncoder()
-  if (buf.startsWith('data: ')) {
-    controller.enqueue(encoder.encode(buf + '\n\n'))
+  // 处理剩余缓冲：可能包含未以 \n\n 结尾的最后一个 SSE 事件
+  const trimmed = buf.trim()
+  if (!trimmed) return
+
+  // 尝试提取 data: 行
+  const lines = trimmed.split('\n')
+  for (const line of lines) {
+    if (line.startsWith('data: ') || line.startsWith('data:')) {
+      const jsonStr = line.replace(/^data:\s?/, '')
+      if (jsonStr === '[DONE]') {
+        controller.enqueue(encoder.encode('data: [DONE]\n\n'))
+      } else {
+        controller.enqueue(encoder.encode(`data: ${jsonStr}\n\n`))
+      }
+    }
   }
 }
 
@@ -538,6 +645,9 @@ async function handleMessages(req, res) {
   // ── 1.5 图片后处理：确保所有图片都是 OpenAI image_url 格式 ──
   ensureOpenAIImageFormat(openaiBody)
 
+  // ── 1.6 修正 OpenAI 格式（tool content 必须是 string、tool_call_id 不能空等）
+  fixOpenAIBody(openaiBody)
+
   // 上游模型名以 active.model 为准（前端可能发的是 anthropic 模型名）
   openaiBody.model = active.model
   openaiBody.stream = true
@@ -553,6 +663,18 @@ async function handleMessages(req, res) {
     openaiBody.tool_choice = 'auto'
   }
 
+  // 清理 OpenAI 兼容 API 不支持的参数（部分提供商遇到未知参数会报错）
+  delete openaiBody.reasoning_effort
+  delete openaiBody.parallel_tool_calls
+  if (openaiBody.metadata) delete openaiBody.metadata
+
+  // 清理 undefined 值（保留 null —— assistant 的 content:null 是 OpenAI 规范要求）
+  for (const key of Object.keys(openaiBody)) {
+    if (openaiBody[key] === undefined) {
+      delete openaiBody[key]
+    }
+  }
+
   // 诊断日志
   const toolCount = openaiBody.tools?.length || 0
   const roleDist = (openaiBody.messages || []).reduce((acc, m) => {
@@ -563,9 +685,19 @@ async function handleMessages(req, res) {
     if (!Array.isArray(m.content)) return acc
     return acc + m.content.filter(c => c.type === 'image_url').length
   }, 0)
-  log(`[diag] model=${openaiBody.model} tools=${toolCount} imgs=${imageCount} msgs=${JSON.stringify(roleDist)} tool_choice=${JSON.stringify(openaiBody.tool_choice)}`)
+  const bodySize = JSON.stringify(openaiBody).length
+  log(`[diag] model=${openaiBody.model} tools=${toolCount} imgs=${imageCount} msgs=${JSON.stringify(roleDist)} tool_choice=${JSON.stringify(openaiBody.tool_choice)} max_tokens=${openaiBody.max_tokens} bodySize=${bodySize}`)
   if (toolCount > 0) {
     log(`[diag] tool_names: ${openaiBody.tools.map(t => t.function?.name || t.name).join(', ')}`)
+  }
+  // 诊断 tool 消息格式
+  for (let i = 0; i < (openaiBody.messages || []).length; i++) {
+    const m = openaiBody.messages[i]
+    if (m.role === 'tool') {
+      log(`[diag] msg[${i}] role=tool tool_call_id=${m.tool_call_id || 'MISSING'} name=${m.name || ''} content_type=${typeof m.content} content_len=${typeof m.content === 'string' ? m.content.length : JSON.stringify(m.content).length}`)
+    } else if (m.role === 'assistant' && m.tool_calls) {
+      log(`[diag] msg[${i}] role=assistant tool_calls=${m.tool_calls.map(tc => `${tc.function?.name}(${tc.id})`).join(',')} content=${m.content === null ? 'null' : typeof m.content}`)
+    }
   }
 
   // max_tokens 动态调整：根据模型名判断上限
@@ -585,7 +717,35 @@ async function handleMessages(req, res) {
     }
   }
 
-  // ── 2. 调上游 ───────────────────────────────────────────────
+  // ── 2. 调上游（含超时保护）──────────────────────────────────
+  const controller = new AbortController()
+  const fetchTimeout = setTimeout(() => controller.abort(), 60_000)
+
+  // 在发送前 dump 完整消息结构（仅在有 tool 消息时）
+  const hasToolMsg = (openaiBody.messages || []).some(m => m.role === 'tool')
+  if (hasToolMsg) {
+    log(`[debug] request with tool messages, dumping structure:`)
+    for (let i = 0; i < openaiBody.messages.length; i++) {
+      const m = openaiBody.messages[i]
+      const contentPreview = typeof m.content === 'string'
+        ? m.content.slice(0, 100)
+        : JSON.stringify(m.content)?.slice(0, 100)
+      log(`  [${i}] role=${m.role} tool_call_id=${m.tool_call_id || '-'} name=${m.name || '-'} content_type=${typeof m.content} preview=${contentPreview}`)
+      if (m.tool_calls) {
+        log(`       tool_calls: ${JSON.stringify(m.tool_calls.map(tc => ({ id: tc.id, name: tc.function?.name, args_type: typeof tc.function?.arguments })))}`)
+      }
+    }
+    // 将完整请求保存到临时文件供调试
+    try {
+      const debugDir = process.env.HOME + '/Library/Application Support/lingxi-agent/bridge-debug'
+      const fs = await import('node:fs')
+      fs.mkdirSync(debugDir, { recursive: true })
+      const debugFile = debugDir + `/tool-req-${Date.now()}.json`
+      fs.writeFileSync(debugFile, JSON.stringify(openaiBody, null, 2))
+      log(`[debug] full request saved to ${debugFile}`)
+    } catch {}
+  }
+
   let upstreamResp
   try {
     upstreamResp = await fetch(active.baseUrl, {
@@ -595,37 +755,86 @@ async function handleMessages(req, res) {
         'authorization': active.token.startsWith('Bearer ') ? active.token : `Bearer ${active.token}`,
       },
       body: JSON.stringify(openaiBody),
+      signal: controller.signal,
     })
   } catch (e) {
+    clearTimeout(fetchTimeout)
     stats.errors += 1
-    stats.lastErr = 'upstream_fetch: ' + e.message
-    return sendError(res, 502, 'upstream fetch failed: ' + e.message)
+    const isTimeout = e.name === 'AbortError'
+    stats.lastErr = isTimeout ? 'upstream_timeout (60s)' : 'upstream_fetch: ' + e.message
+    return sendError(res, 502, isTimeout ? 'upstream request timed out (60s)' : 'upstream fetch failed: ' + e.message)
   }
+  clearTimeout(fetchTimeout)
 
   if (!upstreamResp.ok) {
     const text = await upstreamResp.text().catch(() => '')
     stats.errors += 1
     stats.lastErr = `upstream ${upstreamResp.status}: ${text.slice(0, 200)}`
+    log(`[error] upstream ${upstreamResp.status}: ${text.slice(0, 500)}`)
     return sendError(res, upstreamResp.status, `upstream returned ${upstreamResp.status}`, { upstream_body: text.slice(0, 1000) })
   }
 
-  // ── 3. SSE 流式翻译（含 reasoning token 透传）────────────────
+  const upstreamCT = upstreamResp.headers.get('content-type') || ''
+  log(`[upstream] response ok, content-type: ${upstreamCT}`)
+
+  // 部分 OpenAI 兼容 API 在 stream=true 时仍可能返回非 SSE 的 JSON 错误
+  if (!upstreamCT.includes('text/event-stream') && !upstreamCT.includes('octet-stream')) {
+    const text = await upstreamResp.text().catch(() => '')
+    log(`[warn] upstream returned non-SSE content-type: ${upstreamCT}, body: ${text.slice(0, 500)}`)
+    // 尝试解析 JSON 错误
+    try {
+      const errObj = JSON.parse(text)
+      if (errObj.error || errObj.code) {
+        const errMsg = errObj.error?.message || errObj.message || text.slice(0, 200)
+        stats.errors += 1
+        stats.lastErr = `upstream non-SSE error: ${errMsg}`
+        return sendError(res, 502, `上游模型返回错误: ${errMsg}`, { upstream_body: text.slice(0, 1000) })
+      }
+    } catch {}
+    // 不是 JSON 错误也不是 SSE，直接报错
+    stats.errors += 1
+    stats.lastErr = `unexpected content-type: ${upstreamCT}`
+    return sendError(res, 502, `上游返回了非预期的内容格式 (${upstreamCT})`, { upstream_body: text.slice(0, 500) })
+  }
+
+  // ── 3. SSE 流式翻译（含 reasoning token 透传 + 流超时保护）──
   res.statusCode = 200
   res.setHeader('content-type', 'text/event-stream; charset=utf-8')
   res.setHeader('cache-control', 'no-cache')
   res.setHeader('connection', 'keep-alive')
   res.flushHeaders?.()
 
+  // 流式传输超时：如果 5 分钟内没有任何数据，认为流已挂起
+  let streamTimer = null
+  let streamEnded = false
+  const STREAM_IDLE_TIMEOUT = 300_000
+
+  function resetStreamTimer(label) {
+    if (streamTimer) clearTimeout(streamTimer)
+    if (streamEnded) return
+    streamTimer = setTimeout(() => {
+      if (streamEnded) return
+      streamEnded = true
+      log(`[timeout] SSE stream idle for ${STREAM_IDLE_TIMEOUT / 1000}s (last: ${label}), force closing`)
+      stats.lastErr = `stream idle timeout (${STREAM_IDLE_TIMEOUT / 1000}s)`
+      try {
+        const errEvt = { type: 'error', error: { type: 'overloaded_error', message: '上游响应超时，请重试' } }
+        res.write(`event: error\ndata: ${JSON.stringify(errEvt)}\n\n`)
+      } catch {}
+      try { res.end() } catch {}
+    }, STREAM_IDLE_TIMEOUT)
+  }
+  resetStreamTimer('init')
+
   try {
-    // 拦截上游 SSE 流：提取 reasoning_content / reasoning 字段，
-    // 生成 Anthropic thinking 事件，剩余内容交给 llm-bridge 翻译。
     const { filteredStream, reasoningEmitter } = splitReasoningFromStream(upstreamResp.body)
 
     let thinkingBlockStarted = false
     let thinkingBlockIdx = 0
+    let hasUpstreamError = false
 
-    // 并行：reasoning 事件直接写入 res
     reasoningEmitter.on('reasoning', (text) => {
+      resetStreamTimer('reasoning')
       if (!thinkingBlockStarted) {
         thinkingBlockStarted = true
         const startEvt = {
@@ -652,8 +861,11 @@ async function handleMessages(req, res) {
         thinkingBlockIdx++
       }
     })
+    reasoningEmitter.on('error', (errMsg) => {
+      hasUpstreamError = true
+      log(`[stream] upstream SSE error: ${errMsg}`)
+    })
 
-    // llm-bridge 翻译剩余的 text/tool 内容
     const anthropicStream = handleUniversalStreamRequest(
       filteredStream,
       'openai',
@@ -661,13 +873,33 @@ async function handleMessages(req, res) {
     )
 
     const reader = anthropicStream.getReader()
+    let gotAnyData = false
     while (true) {
       const { value, done } = await reader.read()
       if (done) break
-      if (value) res.write(value)
+      if (value) {
+        gotAnyData = true
+        resetStreamTimer('data')
+        res.write(value)
+      }
     }
+
+    if (streamTimer) clearTimeout(streamTimer)
+    streamEnded = true
+
+    if (!gotAnyData) {
+      const errMsg = hasUpstreamError
+        ? '上游模型返回错误，请检查模型名称和 API Key 配置'
+        : '上游模型返回了空响应，可能是请求格式不被支持（如工具调用格式）。请检查模型是否支持 function calling。'
+      log(`[warn] stream ended with no data, hasUpstreamError=${hasUpstreamError}`)
+      const errEvt = { type: 'error', error: { type: 'api_error', message: errMsg } }
+      res.write(`event: error\ndata: ${JSON.stringify(errEvt)}\n\n`)
+    }
+
     res.end()
   } catch (e) {
+    if (streamTimer) clearTimeout(streamTimer)
+    streamEnded = true
     stats.errors += 1
     stats.lastErr = 'stream_translate: ' + e.message
     log('stream translate error:', e)

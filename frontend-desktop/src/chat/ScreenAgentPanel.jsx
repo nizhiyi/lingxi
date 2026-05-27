@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { Monitor, X, Camera, Loader2, StopCircle, Send, Play, Check, XCircle, Shield, AlertTriangle, Eye, MousePointer } from 'lucide-react';
+import { Monitor, X, Camera, Loader2, StopCircle, Send, Play, Check, XCircle, Shield, AlertTriangle, Eye, MousePointer, Globe } from 'lucide-react';
 import { useStore } from '../state/useStore';
 import { cn } from '../ui/cn';
 import { ScreenBlock, ScreenPlanBlock } from './ScreenBlock';
@@ -166,35 +166,30 @@ export function ScreenAgentPanel() {
           </div>
           <span className="text-xs font-semibold text-[color:var(--text)]">Screen Agent</span>
           <span className="text-[10px] text-[color:var(--text-faint)]">
-            {mode === 'analyze' ? '· 看屏幕' : '· 操控桌面'}
+            {mode === 'analyze' ? '· 看屏幕' : mode === 'operate' ? '· 操控桌面' : '· 浏览器'}
           </span>
 
           {/* 模式切换 */}
           <div className="ml-3 flex gap-0.5 bg-[color:var(--bg-soft)] rounded-md p-0.5">
-            <button
-              onClick={() => setMode('analyze')}
-              disabled={busy}
-              className={cn(
-                'flex items-center gap-1 text-[10px] px-2 py-0.5 rounded transition',
-                mode === 'analyze'
-                  ? 'bg-[color:var(--bg-elev)] text-[color:var(--text)] shadow-sm'
-                  : 'text-[color:var(--text-faint)] hover:text-[color:var(--text-soft)]'
-              )}
-            >
-              <Eye size={10} /> 看屏幕
-            </button>
-            <button
-              onClick={() => setMode('operate')}
-              disabled={busy}
-              className={cn(
-                'flex items-center gap-1 text-[10px] px-2 py-0.5 rounded transition',
-                mode === 'operate'
-                  ? 'bg-[color:var(--bg-elev)] text-[color:var(--text)] shadow-sm'
-                  : 'text-[color:var(--text-faint)] hover:text-[color:var(--text-soft)]'
-              )}
-            >
-              <MousePointer size={10} /> 操控
-            </button>
+            {[
+              { id: 'analyze', icon: Eye, label: '看屏幕' },
+              { id: 'operate', icon: MousePointer, label: '操控' },
+              { id: 'browser', icon: Globe, label: '浏览器' },
+            ].map(m => (
+              <button
+                key={m.id}
+                onClick={() => setMode(m.id)}
+                disabled={busy}
+                className={cn(
+                  'flex items-center gap-1 text-[10px] px-2 py-0.5 rounded transition',
+                  mode === m.id
+                    ? 'bg-[color:var(--bg-elev)] text-[color:var(--text)] shadow-sm'
+                    : 'text-[color:var(--text-faint)] hover:text-[color:var(--text-soft)]'
+                )}
+              >
+                <m.icon size={10} /> {m.label}
+              </button>
+            ))}
           </div>
 
           <div className="ml-auto flex items-center gap-1">
@@ -229,7 +224,7 @@ export function ScreenAgentPanel() {
         <ExecutionProgress />
 
         {/* ─── 空状态引导 ─────────────────────────────────── */}
-        {!hasResult && !busy && (
+        {!hasResult && !busy && mode !== 'browser' && (
           <div className="px-4 py-5 text-center">
             <div className="inline-flex items-center justify-center w-10 h-10 rounded-xl bg-blue-500/10 mb-3">
               {mode === 'analyze'
@@ -255,6 +250,11 @@ export function ScreenAgentPanel() {
               </button>
             )}
           </div>
+        )}
+
+        {/* ─── 浏览器控制面板 ─────────────────────────────── */}
+        {mode === 'browser' && !busy && (
+          <BrowserControlPanel />
         )}
 
         {/* ─── 结果区域 ──────────────────────────────────── */}
@@ -336,6 +336,8 @@ export function ScreenAgentPanel() {
               placeholder={
                 mode === 'analyze'
                   ? '输入想了解的屏幕内容（留空=分析全屏）'
+                  : mode === 'browser'
+                  ? '告诉我你想在浏览器中做什么，例如「打开百度搜索AI」'
                   : '告诉我你想做什么，例如「打开系统偏好设置」'
               }
               className="flex-1 text-sm bg-transparent outline-none text-[color:var(--text)] placeholder:text-[color:var(--text-faint)] disabled:opacity-50"
@@ -359,9 +361,64 @@ export function ScreenAgentPanel() {
             <span>·</span>
             <span>Esc 关闭面板</span>
             {mode === 'operate' && <><span>·</span><span>危险操作会强制确认</span></>}
+            {mode === 'browser' && <><span>·</span><span>通过 Playwright 自动化浏览器</span></>}
           </div>
         </div>
       </div>
     </motion.div>
+  );
+}
+
+function BrowserControlPanel() {
+  const isElectron = !!window.electronAPI;
+  const [browserUrl, setBrowserUrl] = useState('');
+
+  const quickActions = [
+    { label: '打开百度', desc: '导航到 baidu.com', icon: '🔍' },
+    { label: '打开 GitHub', desc: '导航到 github.com', icon: '🐙' },
+    { label: '截取网页', desc: '截图当前浏览器页面', icon: '📸' },
+    { label: '提取内容', desc: '读取网页文本内容', icon: '📄' },
+  ];
+
+  return (
+    <div className="px-4 py-4">
+      <div className="text-center mb-4">
+        <div className="inline-flex items-center justify-center w-10 h-10 rounded-xl bg-purple-500/10 mb-2">
+          <Globe size={20} className="text-purple-500" />
+        </div>
+        <div className="text-sm font-medium text-[color:var(--text)]">浏览器自动化</div>
+        <div className="text-[11px] text-[color:var(--text-faint)] mt-0.5 max-w-xs mx-auto">
+          通过 Playwright MCP 控制浏览器，支持导航、点击、输入、截图等操作
+        </div>
+      </div>
+
+      {isElectron && (
+        <div className="flex items-center gap-2 mb-3">
+          <div className="flex items-center gap-1.5 px-2 py-1 rounded-md bg-emerald-500/10 text-emerald-600 text-[10px]">
+            <div className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
+            Playwright MCP 已就绪
+          </div>
+        </div>
+      )}
+
+      <div className="grid grid-cols-2 gap-2">
+        {quickActions.map(a => (
+          <button
+            key={a.label}
+            className="flex items-center gap-2 p-2.5 rounded-lg border border-[color:var(--line)] hover:bg-[color:var(--bg-soft)] hover:border-[color:var(--accent)]/30 transition text-left"
+          >
+            <span className="text-lg">{a.icon}</span>
+            <div>
+              <div className="text-xs font-medium text-[color:var(--text)]">{a.label}</div>
+              <div className="text-[10px] text-[color:var(--text-faint)]">{a.desc}</div>
+            </div>
+          </button>
+        ))}
+      </div>
+
+      <div className="mt-3 text-[10px] text-[color:var(--text-faint)] text-center">
+        在对话中发送指令，Agent 会自动调用浏览器工具完成任务
+      </div>
+    </div>
   );
 }

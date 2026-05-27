@@ -99,7 +99,13 @@ lingxi-agent/
 │   │   ├── lan_transport.go  # 局域网 HTTP 直连传输
 │   │   ├── wan_transport.go  # 广域网传输（信令中继）
 │   │   └── signaling.go      # 信令客户端（无 HMAC，支持 conversation_invite/accept/reject）
-│   ├── router/               # AI 引擎路由（CCR）
+│   ├── proxy/                # 纯 Go 协议转换代理（Anthropic ↔ OpenAI，替代 Python LiteLLM）
+│   │   ├── types.go          # Anthropic + OpenAI 类型定义
+│   │   ├── transform.go      # 请求转换（messages / system / tools / thinking）
+│   │   ├── stream.go         # 流式响应转换（OpenAI SSE → Anthropic SSE）
+│   │   ├── nonstream.go      # 非流式响应转换
+│   │   └── server.go         # HTTP 服务器（/v1/messages + /health + /v1/models）
+│   ├── router/               # AI 引擎路由（Go 代理管理 + OpenAI 协议桥接）
 │   ├── scheduler/            # 定时任务调度器
 │   ├── groupbehavior/        # 群聊行为引擎（人格驱动并发评估 + quirks + 冷场守望者）
 │   ├── vectordb/             # 向量数据库（纯 Go cosine + 分块/嵌入/混合检索）
@@ -180,8 +186,8 @@ lingxi-agent/
 │   ├── assets/               # 图标、entitlements
 │   └── resources/            # 构建时填充的运行时资源
 │       ├── ai-engine/        # Claude CLI
-│       ├── bridge/           # llm-bridge (JS)
-│       ├── litellm-bridge/   # LiteLLM Bridge (Python)
+│       ├── bridge/           # llm-bridge (JS, 旧版回退)
+│       ├── litellm-bridge/   # [已移除] 已被 backend-desktop/proxy/ 纯 Go 代理替代
 │       ├── node-bin/         # 内嵌 Node.js
 │       └── whisper/          # whisper.cpp 离线 ASR (whisper-cli + ggml-base.bin)
 │
@@ -317,6 +323,7 @@ dist-electron/
 | GET/POST/DELETE | /api/api-profiles/* | Profile CRUD | 接入点管理 |
 | POST | /api/api-profiles/:id/activate | ActivateAPIProfile | 激活接入点 |
 | POST | /api/api-profiles/:id/test | TestAPIProfile | 测试连通性 |
+| POST | /api/api-profiles/fetch-models | FetchModels | 自动获取供应商可用模型列表 |
 | GET | /api/skills | ListSkills | 技能列表 |
 | POST | /api/skills/upload | UploadSkill | 上传技能 |
 | POST | /api/skills/batch-upload | BatchUploadSkill | 批量上传技能 |
@@ -602,6 +609,10 @@ xattr -cr "/Applications/灵犀.app"
 
 ### 平台能力
 - 多模型多供应商接入
+- **纯 Go 协议转换代理**（`backend-desktop/proxy/`：Anthropic /v1/messages ↔ OpenAI /v1/chat/completions，支持流式/非流式/Tool use/思考链/多模态，零启动延迟、零外部依赖）
+- **Go 代理预启动**（激活 OpenAI 协议接入点时自动预启动代理，< 1ms 就绪）
+- **自动获取可用模型列表**（POST /api/api-profiles/fetch-models，输入 API key 后自动查询供应商 /models 端点，返回可用模型列表供用户选择）
+- **供应商预设配置**（内置 DeepSeek/Qwen/GLM/Moonshot/Doubao 等供应商的 base_url 和推荐模型列表，减少用户手动配置错误）
 - MCP 工具管理（stdio/SSE/HTTP）+ 配置导出
 - IM 集成（企业微信/钉钉/飞书）
 - **Windows 构建支持（NSIS 安装包 + Portable）**
@@ -660,8 +671,49 @@ xattr -cr "/Applications/灵犀.app"
   - GET `/api/group-chats/:id/messages?before=&limit=` — 下拉加载更早
   - POST `/api/group-chats/:id/messages/:msgId/recall` — 用户撤回（≤120s）
   - POST `/api/group-chats/upload` — 群聊图片上传（multipart，10MB 上限）
+  - POST `/api/group-chats/:id/members/add` — 群主增员（本端 Agent + 远端 Peer 列表）
+  - POST `/api/group-chats/:id/members/remove` — 群主将某 Peer 名下的 Agent（或 invited 占位）移出群
   - GET/PUT `/api/agents/:id/personality` — Agent 群聊人格 CRUD
-- **新增 Nexus 端点**：POST `/api/nexus/group/recall` — 跨实例同步撤回
-- **新增 WS 事件**：group_message_recalled / group_agent_typing
+- **新增 Nexus 端点**：POST `/api/nexus/group/recall` — 跨实例同步撤回；POST `/api/nexus/group/member_sync` — 宿主推送成员全量快照
+- **新增 WS 事件**：group_message_recalled / group_agent_typing / **group_members_sync**（刷新成员列表）
 - **AgentFactoryPage 角色步骤增加"群聊人格"折叠面板**：ChipInput（标签/兴趣）+ 概率 slider + min/max 延迟 + 安静时段（HH:MM）+ Emoji 频率 + 错别字/复读/被怼冷静 + cold_start 开关 + style_hint Textarea
 - **前端 nexusSlice 扩展**：groupTypingAgents / groupDrafts / groupOldestId + loadOlderGroupMessages + applyGroupRecall + applyGroupAgentTyping
+
+### cc-haha Provider 架构优化（v2026-05 Phase 2）
+- **新增 Anthropic 直连供应商**：GLM/智谱（`glm_anthropic`，`open.bigmodel.cn/api/anthropic`）、Kimi（`kimi_anthropic`，`api.kimi.com/coding`）、MiniMax（`minimax_anthropic`，`api.minimaxi.com/anthropic`）、Ollama（`ollama_anthropic`，本地 Anthropic 直连）、LM Studio（`lmstudio_anthropic`），均绕过外部协议转换层零 Python 依赖
+- **DeepSeek 默认模型更新**：`deepseek-chat` → `deepseek-v4-pro`
+- **模型上下文窗口管理**：provider meta 中新增 `context_windows` 映射（如 `{"deepseek-v4-pro":1000000}`），`buildClaudeEnv` 自动设置 `CLAUDE_CODE_MAX_CONTEXT_LENGTH_TOKENS` + `ANTHROPIC_MODEL_CONTEXT_WINDOWS` 环境变量
+- **认证策略（auth_strategy）**：支持 `auth_token`（默认）/ `auth_token_empty_api_key`（Ollama/LM Studio 用，ANTHROPIC_API_KEY=""）/ `api_key`（官方），buildClaudeEnv 按策略设置正确的认证头
+- **Provider 特定环境变量（default_env）**：从 meta JSON 读取并注入，如 `CC_HAHA_SEND_DISABLED_THINKING`（GLM/Kimi）、`ANTHROPIC_DEFAULT_*_MODEL_SUPPORTED_CAPABILITIES`（DeepSeek 推理能力）
+- **两阶段 Provider 测试**：Step 1 直连上游验证 → Step 2 代理管道验证（仅 OpenAI 协议），前端展示分步延迟
+- **前端增强**：新供应商图标/色彩/模型列表 + ProfileCard 显示"直连"/"代理"徽章 + 测试结果分步延迟显示
+
+### 定时任务与用量统计增强（v2026-05 Phase 4）
+- **定时任务页面重构**：渐变 Hero 卡片头部 + 4 格统计（全部/已启用/运行中/累计执行）+ 任务卡片（智能体头像/倒计时/执行进度条/hover 操作栏）+ 时间线风格执行记录弹窗
+- **用量统计增强**：
+  - 新增费用趋势折线图（AreaChart 渐变面积 + 日环比变化箭头）
+  - 新增按智能体聚合面板（AgentAvatar + 占比进度条 + 百分比）
+  - 后端新增 `GroupUsageByAgent` / `GroupUsageCostByDay` DB 函数 + API 返回 `by_agent` / `cost_trend`
+  - Token 日柱图与费用趋势并排双列布局
+  - 预算预警 UI 紧凑化
+- **Screen Agent 浏览器控制入口**：Screen Agent 面板新增"浏览器"模式 tab（Globe 图标），展示 Playwright MCP 就绪状态 + 快捷操作（打开网页/截取/提取内容），通过 Playwright MCP 工具自动化浏览器
+
+### 纯 Go 协议转换代理（v2026-05 Phase 3）
+- **替代 LiteLLM Bridge**：用纯 Go 实现的 `backend-desktop/proxy/` 包替代外部 Python LiteLLM 进程
+- **零启动延迟**：Go 代理随 HTTP handler 调用即时启动（< 1ms），无需等待 Python 进程 + LiteLLM 加载（30s+）
+- **零外部依赖**：不再需要 Python 环境、pip 安装 litellm/yaml、内嵌 bridge.py 脚本
+- **完整协议转换**：Anthropic `/v1/messages` → OpenAI `/v1/chat/completions`，支持：
+  - 流式（SSE）和非流式响应
+  - Tool use（tool_use / tool_result 双向转换）
+  - 思考链（reasoning_content → thinking block）
+  - 多模态（图片 base64）
+  - System prompt（字符串 + content block 两种格式）
+  - 上游错误透传（包装为 Anthropic error 格式）
+- **DeepSeek 特殊兼容**：自动检测 DeepSeek API URL，启用 reasoning_content 字段回传
+- **代码结构**：
+  - `proxy/types.go` — Anthropic + OpenAI 类型定义
+  - `proxy/transform.go` — 请求转换（messages / system / tools / thinking）
+  - `proxy/stream.go` — 流式响应转换（OpenAI SSE → Anthropic SSE）
+  - `proxy/nonstream.go` — 非流式响应转换
+  - `proxy/server.go` — HTTP 服务器（/v1/messages + /health + /v1/models）
+  - `router/ccr.go` — 重写为使用 Go proxy.Server（删除 Python 子进程管理逻辑）

@@ -72,9 +72,9 @@ func Decide(member db.GroupMember, recent []db.GroupMessage, trigger string, per
 		}
 		return Decision{}
 	case "wake_full":
-		// 用户发言：适度接话，非全员
-		if rollSpeak(member, recent, personality, 42, latest) {
-			return Decision{ShouldSpeak: true, DelayMs: 200 + rand.Intn(2200)}
+		// 用户发言：提高接话率，避免出现「人等 Agent」过长空窗
+		if rollSpeak(member, recent, personality, 56, latest) {
+			return Decision{ShouldSpeak: true, DelayMs: 120 + rand.Intn(1800)}
 		}
 		return Decision{}
 	case "wake_light":
@@ -82,14 +82,14 @@ func Decide(member db.GroupMember, recent []db.GroupMessage, trigger string, per
 			return Decision{}
 		}
 		if latest.MsgType == "user_post" {
-			if rollSpeak(member, recent, personality, 35, latest) {
-				return Decision{ShouldSpeak: true, DelayMs: 250 + rand.Intn(1800)}
+			if rollSpeak(member, recent, personality, 44, latest) {
+				return Decision{ShouldSpeak: true, DelayMs: 200 + rand.Intn(1400)}
 			}
 			return Decision{}
 		}
-		// 其他 Agent 发言后：低概率插嘴
-		if rollSpeak(member, recent, personality, 22, latest) {
-			return Decision{ShouldSpeak: true, DelayMs: 400 + rand.Intn(2800)}
+		// 其他 Agent 发言后：适当提高插一句的概率
+		if rollSpeak(member, recent, personality, 32, latest) {
+			return Decision{ShouldSpeak: true, DelayMs: 300 + rand.Intn(2400)}
 		}
 		return Decision{}
 	case "wake":

@@ -182,14 +182,17 @@ func (rt *roomRuntime) wakeUserSubset() {
 	if n == 0 {
 		return
 	}
-	// 用户发言：最多 2 个 Agent 尝试接话，且可能 0 人（避免全员 @ 用户）
-	maxPick := 2
-	if n < maxPick {
-		maxPick = n
+	// 用户发言：至少 1 个本端 Agent 尝试接话，避免「骰到 0 人」导致长时间冷场；
+	// 群内有多人时再以一定概率加到 2 人抢话。
+	pickCount := 1
+	if n >= 2 && rand.Intn(100) < 45 {
+		pickCount = 2
 	}
-	pick := rand.Intn(maxPick + 1)
+	if pickCount > n {
+		pickCount = n
+	}
 	idx := rand.Perm(n)
-	for i := 0; i < pick; i++ {
+	for i := 0; i < pickCount; i++ {
 		rt.loops[idx[i]].wakeFull()
 	}
 }
@@ -199,8 +202,8 @@ func (rt *roomRuntime) wakeLightSubset() {
 	if n == 0 {
 		return
 	}
-	// Agent 发言后：40% 概率无人接话；否则最多 1 人轻量接话
-	if rand.Intn(100) < 40 {
+	// Agent 发言后：约 25% 全场安静；其余情况最多 1 人轻量接话（别把线完全聊死）
+	if rand.Intn(100) < 25 {
 		return
 	}
 	maxPick := 1

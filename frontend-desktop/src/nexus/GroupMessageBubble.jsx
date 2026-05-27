@@ -251,7 +251,11 @@ export default function GroupMessageBubble({
             {msg.content && (
               <div className="md-block prose-a2a">
                 {isAgentMsg ? (
-                  <BlocksRenderer blocks={parseAssistantContent(msg.content).filter((b) => b.type !== 'thinking')} live={false} hideThinking />
+                  <BlocksRenderer
+                    blocks={parseAssistantContent(msg.content).filter((b) => b.type !== 'thinking' && b.type !== 'tool')}
+                    live={false}
+                    hideThinking
+                  />
                 ) : looksLikeMarkdown(msg.content) ? (
                   <ReactMarkdown remarkPlugins={[remarkGfm]} components={MD_COMPONENTS}>
                     {replaceTextEmojis(msg.content)}

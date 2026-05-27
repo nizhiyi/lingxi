@@ -11,6 +11,7 @@ type Session struct {
 	Pinned          bool      `json:"pinned"`
 	Summary         string    `json:"summary,omitempty"`
 	Folder          string    `json:"folder,omitempty"`
+	PermissionMode  string    `json:"permission_mode"`
 	CreatedAt       time.Time `json:"created_at"`
 	UpdatedAt       time.Time `json:"updated_at"`
 }

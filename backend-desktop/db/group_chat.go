@@ -3,6 +3,7 @@ package db
 import (
 	"database/sql"
 	"errors"
+	"strings"
 	"time"
 )
 
@@ -266,6 +267,79 @@ func RemoveGroupMember(roomID int64, peerID string, agentName string) error {
 	_, err := DB.Exec(`DELETE FROM group_members WHERE room_id=? AND peer_id=? AND agent_name=?`,
 		roomID, peerID, agentName)
 	return err
+}
+
+// LookupAgentIDByName 精确名称查找非内置 Agent（跨实例同步时重建 member.agent_id）
+func LookupAgentIDByName(name string) int64 {
+	n := strings.TrimSpace(name)
+	if n == "" {
+		return 0
+	}
+	var id sql.NullInt64
+	err := DB.QueryRow(`SELECT id FROM agents WHERE name=? AND builtin=0 LIMIT 1`, n).Scan(&id)
+	if err != nil || !id.Valid {
+		return 0
+	}
+	return id.Int64
+}
+
+// GroupMemberSyncRow 跨实例同步用成员快照一行（宿主全量推送）
+type GroupMemberSyncRow struct {
+	PeerID       string `json:"peer_id"`
+	PeerNickname string `json:"peer_nickname"`
+	AgentName    string `json:"agent_name"`
+	AgentID      int64  `json:"agent_id"` // 仅发送方本端成员的 ID；接收方只会保存「自己 peer」名下的 ID
+	AgentCaps    string `json:"agent_caps"`
+	Status       string `json:"status"`
+}
+
+// ReplaceGroupMembersForSync 丢弃旧成员并以快照重建（远端侧与宿主侧推送保持一致）
+func ReplaceGroupMembersForSync(roomID int64, receiverPeerID string, rows []GroupMemberSyncRow) error {
+	tx, err := DB.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	if _, err := tx.Exec(`DELETE FROM group_members WHERE room_id=?`, roomID); err != nil {
+		return err
+	}
+	for _, r := range rows {
+		if r.PeerID == "" || r.AgentName == "" {
+			continue
+		}
+		isLocal := receiverPeerID != "" && r.PeerID == receiverPeerID
+		isLocalFlag := 0
+		if isLocal {
+			isLocalFlag = 1
+		}
+		aid := int64(0)
+		if isLocal {
+			// 宿主推送的 AgentID 在接收端不可靠，必须与本地 agents 表按名称校准
+			if r.AgentID > 0 {
+				if ga, err := GetAgent(r.AgentID); err == nil && ga != nil && ga.Name == r.AgentName {
+					aid = r.AgentID
+				}
+			}
+			if aid == 0 {
+				aid = LookupAgentIDByName(r.AgentName)
+			}
+		}
+		caps := r.AgentCaps
+		if caps == "" {
+			caps = "[]"
+		}
+		st := r.Status
+		if st == "" {
+			st = "joined"
+		}
+		if _, err := tx.Exec(`
+			INSERT INTO group_members (room_id, peer_id, peer_nickname, agent_id, agent_name, agent_caps, is_local, status)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+			roomID, r.PeerID, r.PeerNickname, aid, r.AgentName, caps, isLocalFlag, st); err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
 }
 
 // ─── Group Messages ──────────────────────────────────────────────

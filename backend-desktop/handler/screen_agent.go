@@ -497,7 +497,7 @@ func callVisionLLM(systemPrompt, userMessage, screenshotBase64 string) (string, 
 		return "", fmt.Errorf("未配置 API 接入点，请先在设置中配置模型")
 	}
 
-	_, _, model, baseURL, _, protocol, _ := activeProfileSnapshot()
+	_, _, model, baseURL, _, protocol, _, _, _ := activeProfileSnapshot()
 	if model == "" {
 		return "", fmt.Errorf("未配置模型")
 	}
@@ -522,10 +522,11 @@ func callVisionLLM(systemPrompt, userMessage, screenshotBase64 string) (string, 
 	var reqBody map[string]interface{}
 
 	if protocol == "anthropic" {
-		// Anthropic 格式
-		if !strings.Contains(base, "/v1") {
-			base += "/v1"
-		}
+		// Anthropic 格式 — 规范化 base URL
+		base = strings.TrimSuffix(base, "/v1/messages")
+		base = strings.TrimSuffix(base, "/messages")
+		base = strings.TrimSuffix(base, "/v1")
+		base += "/v1"
 		reqBody = map[string]interface{}{
 			"model":      model,
 			"max_tokens": 2048,
@@ -586,10 +587,16 @@ func callVisionLLM(systemPrompt, userMessage, screenshotBase64 string) (string, 
 		return "", fmt.Errorf("Anthropic API 无文本回复")
 	}
 
-	// OpenAI 兼容格式
-	if !strings.HasSuffix(base, "/v1") {
-		base += "/v1"
-	}
+	// OpenAI 兼容格式 — 规范化 base URL，剥离所有可能的路径后缀再统一拼接
+	base = strings.TrimSuffix(base, "/v1/chat/completions")
+	base = strings.TrimSuffix(base, "/chat/completions")
+	base = strings.TrimSuffix(base, "/v1/completions")
+	base = strings.TrimSuffix(base, "/completions")
+	base = strings.TrimSuffix(base, "/v1")
+	endpoint := base + "/v1/chat/completions"
+
+	slog.Info("screen_agent openai call", "base_url_raw", baseURL, "normalized", base, "endpoint", endpoint)
+
 	reqBody = map[string]interface{}{
 		"model": model,
 		"messages": []map[string]interface{}{
@@ -601,7 +608,7 @@ func callVisionLLM(systemPrompt, userMessage, screenshotBase64 string) (string, 
 	}
 
 	body, _ := json.Marshal(reqBody)
-	httpReq, err := http.NewRequest("POST", base+"/chat/completions", bytes.NewReader(body))
+	httpReq, err := http.NewRequest("POST", endpoint, bytes.NewReader(body))
 	if err != nil {
 		return "", err
 	}

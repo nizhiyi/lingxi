@@ -139,12 +139,12 @@ export function Modal({ open, onClose, title, footer, children, width = 520 }) {
         role="dialog"
         aria-modal="true"
         aria-labelledby={title ? titleId : undefined}
-        className="surface w-full mx-4"
-        style={{ maxWidth: width, animation: 'modalContentIn .3s cubic-bezier(.22,1,.36,1) forwards' }}
+        className="surface w-full mx-4 flex flex-col"
+        style={{ maxWidth: width, maxHeight: 'calc(100vh - 64px)', animation: 'modalContentIn .3s cubic-bezier(.22,1,.36,1) forwards' }}
         onClick={(e) => e.stopPropagation()}
       >
         {title && (
-          <div className="px-5 py-3 border-b border-[color:var(--line)] flex items-center justify-between">
+          <div className="px-5 py-3 border-b border-[color:var(--line)] flex items-center justify-between shrink-0">
             <div id={titleId} className="font-semibold">{title}</div>
             <button
               className="text-[color:var(--text-faint)] hover:text-[color:var(--text)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[color:var(--accent)]/40 rounded-md"
@@ -153,8 +153,8 @@ export function Modal({ open, onClose, title, footer, children, width = 520 }) {
             >✕</button>
           </div>
         )}
-        <div className="p-5">{children}</div>
-        {footer && <div className="px-5 py-3 border-t border-[color:var(--line)] flex justify-end gap-2">{footer}</div>}
+        <div className="p-5 overflow-y-auto scrollable flex-1 min-h-0">{children}</div>
+        {footer && <div className="px-5 py-3 border-t border-[color:var(--line)] flex justify-end gap-2 shrink-0">{footer}</div>}
       </div>
     </div>
   );

@@ -17,8 +17,6 @@ electron/resources/node-bin-win/
 electron/resources/ccr/
 electron/resources/bridge/node_modules/
 electron/resources/bridge/package-lock.json
-# litellm-bridge 打包 Python 依赖目录（build-desktop.sh 生成）
-electron/resources/litellm-bridge/site-packages/
 # whisper.cpp 大模型文件（超出 GitHub 100MB 限制）
 electron/resources/whisper/ggml-base.bin
 electron/resources/whisper/whisper-cli
@@ -56,3 +54,4 @@ frontend-mobile/dist/
 
 # Embedded git repos
 ai-config/skills/dot-skill/
+cc-haha/

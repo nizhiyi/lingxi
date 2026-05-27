@@ -31,7 +31,7 @@ node -e "
 echo "  ✓ 版本号: $CURRENT_VERSION → $NEW_VERSION"
 
 echo "========================================"
-echo "  灵犀 桌面客户端构建脚本 (Go + AI Engine + Bridge Router)"
+echo "  灵犀 桌面客户端构建脚本 (Go + AI Engine)"
 echo "  目标平台: $BUILD_TARGETS | 版本: $NEW_VERSION"
 echo "========================================"
 
@@ -180,39 +180,10 @@ popd > /dev/null
 
 echo "  ✓ Bridge 路由层已就绪: $(du -sh "$BRIDGE_BUNDLE_DIR" 2>/dev/null | cut -f1)"
 
-# ── 3.6 准备 LiteLLM Bridge（Python，工具协议兼容性更稳）────────────
-echo ""
-echo "▶ [3.6] 准备 LiteLLM Bridge (Python)..."
-LITELLM_DIR="$RESOURCES_DIR/litellm-bridge"
-mkdir -p "$LITELLM_DIR"
-
-if [ ! -f "$LITELLM_DIR/bridge.py" ]; then
-  echo "  ✗ 缺少 $LITELLM_DIR/bridge.py (仓库不完整)" >&2
-  exit 1
-fi
-chmod +x "$LITELLM_DIR/bridge"
-
-PYTHON_BIN_FOR_BRIDGE="${PYTHON_BIN_FOR_BRIDGE:-$(which python3 2>/dev/null)}"
-if [ -z "$PYTHON_BIN_FOR_BRIDGE" ] || [ ! -x "$PYTHON_BIN_FOR_BRIDGE" ]; then
-  echo "  ⚠️  未找到 python3，跳过 litellm 打包安装（运行时将依赖系统 litellm）"
-else
-  SITE_PKG="$LITELLM_DIR/site-packages"
-  echo "  ▸ 安装 litellm 依赖到 site-packages (python: $PYTHON_BIN_FOR_BRIDGE)..."
-  if "$PYTHON_BIN_FOR_BRIDGE" -m pip install \
-      -r "$LITELLM_DIR/requirements.txt" \
-      --target "$SITE_PKG" \
-      --quiet \
-      --no-cache-dir; then
-    echo "  ✓ LiteLLM Bridge 已就绪: $(du -sh "$LITELLM_DIR" 2>/dev/null | cut -f1)"
-  else
-    echo "  ⚠️  litellm 安装失败（非致命；bridge 将尝试系统 litellm）"
-  fi
-fi
-
-# ── 3.7 准备 whisper.cpp 离线语音识别（仅 macOS）──────────────────
+# ── 3.6 准备 whisper.cpp 离线语音识别（仅 macOS）──────────────────
 if [[ "$BUILD_TARGETS" == *"mac"* ]]; then
 echo ""
-echo "▶ [3.7] 准备 whisper.cpp 离线语音识别..."
+echo "▶ [3.6] 准备 whisper.cpp 离线语音识别..."
 WHISPER_DIR="$RESOURCES_DIR/whisper"
 mkdir -p "$WHISPER_DIR"
 
@@ -265,7 +236,7 @@ else
 fi
 else
   echo ""
-  echo "▶ [3.7] 跳过 whisper.cpp（仅 macOS 支持离线语音识别）"
+  echo "▶ [3.6] 跳过 whisper.cpp（仅 macOS 支持离线语音识别）"
 fi
 
 # ── 4. 内嵌 Node.js 二进制（claude CLI 运行时）────────────────────

@@ -127,3 +127,79 @@ func DeleteIMConnector(c *gin.Context) {
 	}
 	c.JSON(http.StatusOK, gin.H{"ok": true})
 }
+
+// SendWebhookMessage POST /api/im-connectors/:id/send
+func SendWebhookMessage(c *gin.Context) {
+	id, err := strconv.ParseInt(c.Param("id"), 10, 64)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid id"})
+		return
+	}
+	conn, err := db.GetIMConnectorByID(id)
+	if err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "connector not found"})
+		return
+	}
+	if conn.Platform != "wecom_webhook" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "only wecom_webhook supports direct send"})
+		return
+	}
+
+	var body struct {
+		MsgType      string   `json:"msg_type"`
+		Content      string   `json:"content" binding:"required"`
+		MentionedList []string `json:"mentioned_list"`
+	}
+	if err := c.ShouldBindJSON(&body); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	wh, err := connector.NewWecomWebhookConnector(conn.Config)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "invalid webhook config: " + err.Error()})
+		return
+	}
+
+	if body.MsgType == "markdown" {
+		err = wh.SendMarkdown(body.Content)
+	} else {
+		err = wh.SendText(body.Content, body.MentionedList)
+	}
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"ok": true})
+}
+
+// TestWebhook POST /api/im-connectors/:id/test
+func TestWebhook(c *gin.Context) {
+	id, err := strconv.ParseInt(c.Param("id"), 10, 64)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid id"})
+		return
+	}
+	conn, err := db.GetIMConnectorByID(id)
+	if err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "connector not found"})
+		return
+	}
+	if conn.Platform != "wecom_webhook" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "only wecom_webhook supports test"})
+		return
+	}
+
+	wh, err := connector.NewWecomWebhookConnector(conn.Config)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "invalid webhook config: " + err.Error()})
+		return
+	}
+
+	err = wh.SendText("🤖 灵犀 AI Agent 连接测试成功！", nil)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"ok": true})
+}

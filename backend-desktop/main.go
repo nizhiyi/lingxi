@@ -155,6 +155,28 @@ func main() {
 	api.PUT("/im-connectors/:id/enable", handler.EnableIMConnector)
 	api.PUT("/im-connectors/:id/disable", handler.DisableIMConnector)
 	api.DELETE("/im-connectors/:id", handler.DeleteIMConnector)
+	api.POST("/im-connectors/:id/send", handler.SendWebhookMessage)
+	api.POST("/im-connectors/:id/test", handler.TestWebhook)
+
+	// 权限审批
+	api.GET("/permission-rules", handler.ListPermissionRulesHandler)
+	api.POST("/permission-rules", handler.CreatePermissionRuleHandler)
+	api.DELETE("/permission-rules/:id", handler.DeletePermissionRuleHandler)
+	api.GET("/approvals/pending", handler.ListPendingApprovalsHandler)
+	api.GET("/approvals", handler.ListRecentApprovalsHandler)
+	api.POST("/approvals/:id/review", handler.ReviewApprovalHandler)
+
+	// H5 远程访问
+	api.GET("/h5-access/settings", handler.GetH5AccessSettingsHandler)
+	api.PUT("/h5-access/settings", handler.UpdateH5AccessSettingsHandler)
+	api.GET("/h5-access/tokens", handler.ListH5TokensHandler)
+	api.POST("/h5-access/tokens", handler.GenerateH5TokenHandler)
+	api.POST("/h5-access/tokens/:id/revoke", handler.RevokeH5TokenHandler)
+	api.DELETE("/h5-access/tokens/:id", handler.DeleteH5TokenHandler)
+	api.POST("/h5-access/validate", handler.ValidateH5TokenHandler)
+	api.GET("/h5-access/sessions", handler.H5SessionListHandler)
+	api.GET("/h5-access/session/:sessionId/messages", handler.H5SessionMessagesHandler)
+	api.GET("/h5-access/agents", handler.H5AgentsListHandler)
 
 	// 模型 / 接入点 / AKSK 档案
 	api.GET("/providers", handler.ListProviders)
@@ -163,6 +185,7 @@ func main() {
 	api.DELETE("/api-profiles/:id", handler.DeleteAPIProfile)
 	api.POST("/api-profiles/:id/activate", handler.ActivateAPIProfile)
 	api.POST("/api-profiles/:id/test", handler.TestAPIProfile)
+	api.POST("/api-profiles/fetch-models", handler.FetchModels)
 
 	// 用量
 	api.GET("/usage", handler.GetUsage)
@@ -243,6 +266,7 @@ func main() {
 	nexusAPI.POST("/group/message", handler.NexusReceiveGroupMessage)
 	nexusAPI.POST("/group/leave", handler.NexusReceiveGroupLeave)
 	nexusAPI.POST("/group/stream_token", handler.NexusReceiveGroupStreamToken)
+	nexusAPI.POST("/group/member_sync", handler.NexusReceiveGroupMemberSync)
 	nexusAPI.POST("/group/recall", handler.NexusReceiveGroupRecall)
 
 	// ── 群聊 HTTP API ─────────────────────────────────────────
@@ -259,6 +283,8 @@ func main() {
 	api.POST("/group-chats/:id/terminate", handler.TerminateGroupChat)
 	api.POST("/group-chats/:id/accept", handler.AcceptGroupInvite)
 	api.POST("/group-chats/:id/reject", handler.RejectGroupInvite)
+	api.POST("/group-chats/:id/members/add", handler.InviteGroupMembers)
+	api.POST("/group-chats/:id/members/remove", handler.KickGroupMemberFromRoom)
 	api.DELETE("/group-chats/:id", handler.DeleteGroupChatHandler)
 
 	// ── 群聊 Agent 人格 ──────────────────────────────────────
@@ -302,6 +328,9 @@ func main() {
 	// Bridge 路由层（OpenAI ↔ Anthropic 转换代理，由 supermemoryai/llm-bridge 实现）
 	api.GET("/router/status", handler.GetRouterStatus)
 	api.POST("/router/stop", handler.StopRouter)
+
+	// H5 远程访问移动端页面
+	r.GET("/h5", handler.ServeH5Page)
 
 	r.NoRoute(func(c *gin.Context) {
 		if len(c.Request.URL.Path) >= 4 && c.Request.URL.Path[:4] == "/api" {

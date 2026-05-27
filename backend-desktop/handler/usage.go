@@ -20,18 +20,22 @@ func GetUsage(c *gin.Context) {
 	summary, _ := db.SumUsageSince(since)
 	byDay, _ := db.GroupUsageByDay(days)
 	byModel, _ := db.GroupUsageByModel(days)
+	byAgent, _ := db.GroupUsageByAgent(days)
+	costTrend, _ := db.GroupUsageCostByDay(days)
 	recent, _ := db.ListRecentUsage(100)
 
 	today := time.Now().Truncate(24 * time.Hour)
 	todaySum, _ := db.SumUsageSince(today)
 
 	c.JSON(http.StatusOK, gin.H{
-		"range":    rng,
-		"summary":  summary,
-		"today":    todaySum,
-		"by_day":   byDay,
-		"by_model": byModel,
-		"recent":   recent,
+		"range":      rng,
+		"summary":    summary,
+		"today":      todaySum,
+		"by_day":     byDay,
+		"by_model":   byModel,
+		"by_agent":   byAgent,
+		"cost_trend": costTrend,
+		"recent":     recent,
 	})
 }
 

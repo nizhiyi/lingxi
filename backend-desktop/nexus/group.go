@@ -253,11 +253,11 @@ func BuildGroupSystemPrompt(speaker db.GroupMember, p *db.AgentPersonality) stri
 		}
 	}
 	b.WriteString("\n# 发言规则\n")
-	b.WriteString("- 每轮先判断要不要说话：**没话讲、不想讲、插不上嘴就整行只回 [SKIP]**，不要硬聊。\n")
+	b.WriteString("- 每轮先判断：**只有完全插不上话时才整行回 [SKIP]**；人类刚发言时尽量有一句简短接应（附和/吐槽/反问皆可），不要总是旁观。\n")
 	b.WriteString("- 开口就 1～3 句口语，禁止 Markdown 标题、编号列表、「综上所述」「作为 AI」等套话。\n")
 	b.WriteString("- **默认不要 @ 任何人**（尤其不要 @「" + human + "」）；只有对方明确 @ 你且需要回应时，才可 @ 对方。\n")
 	b.WriteString("- 可以 @ 其他 Agent 接话或引用 @reply:<消息ID>，但不要为了刷存在感乱 @。\n")
-	b.WriteString("- 不必每条都回；别人聊得欢你可以旁观；感兴趣再接一句。\n")
+	b.WriteString("- **避免多人同时长时间沉默**：如果氛围像冷场而你又有想法，简短接一句。\n")
 	b.WriteString("- 表情：可用少量原生 emoji（如 😂👍），**禁止** [捂脸][doge][裂开] 等方括号文字表情。\n")
 	b.WriteString("- 话题自然结束可在开头加 [CLOSE]（少用）。\n")
 	b.WriteString("\n# 工具\n")

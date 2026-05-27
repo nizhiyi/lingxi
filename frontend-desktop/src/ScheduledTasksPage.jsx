@@ -1,13 +1,15 @@
-import { useEffect, useState, useCallback } from 'react';
+import { useEffect, useState, useCallback, useMemo } from 'react';
 import {
   Clock, Plus, Trash2, Play, Pause, Settings2, ChevronRight,
   ToggleLeft, ToggleRight, Bell, BellOff, RefreshCw, History,
   Zap, CalendarClock, CheckCircle2, XCircle, Loader2, ExternalLink,
+  Timer, Activity, TrendingUp,
 } from 'lucide-react';
 import { api } from './api/client';
 import { useStore } from './state/useStore';
-import { Button, Card, Modal, Input, Badge } from './ui/primitives';
+import { Button, Card, Modal, Input, Badge, Select } from './ui/primitives';
 import { cn } from './ui/cn';
+import AgentAvatar from './ui/AgentAvatar';
 
 const SCHEDULE_PRESETS = [
   { value: 'every_1m', label: '每分钟' },
@@ -57,6 +59,17 @@ function formatTime(t) {
   return `${d.getMonth() + 1}/${d.getDate()} ${time}`;
 }
 
+function relativeCountdown(t) {
+  if (!t) return '';
+  const diff = new Date(t) - Date.now();
+  if (diff <= 0) return '即将执行';
+  const mins = Math.floor(diff / 60000);
+  if (mins < 60) return `${mins}分钟后`;
+  const hrs = Math.floor(mins / 60);
+  if (hrs < 24) return `${hrs}小时${mins % 60 > 0 ? (mins % 60) + '分' : ''}后`;
+  return `${Math.floor(hrs / 24)}天后`;
+}
+
 export default function ScheduledTasksPage() {
   const [tasks, setTasks] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -81,13 +94,16 @@ export default function ScheduledTasksPage() {
 
   useEffect(() => { loadTasks(); }, [loadTasks]);
 
-  // 任务完成后自动刷新列表
   useEffect(() => {
-    if (taskHistory.length > 0) {
-      loadTasks();
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    if (taskHistory.length > 0) loadTasks();
   }, [taskHistory.length]);
+
+  const stats = useMemo(() => {
+    const active = tasks.filter(t => t.enabled).length;
+    const running = Object.keys(runningTasks).length;
+    const totalRuns = tasks.reduce((s, t) => s + (t.run_count || 0), 0);
+    return { total: tasks.length, active, running, totalRuns };
+  }, [tasks, runningTasks]);
 
   const handleToggle = async (task) => {
     await api.toggleScheduledTask(task.id, !task.enabled).catch(() => {});
@@ -142,22 +158,34 @@ export default function ScheduledTasksPage() {
   const isCustomCron = editTask && !presetMatch;
 
   return (
-    <div className="max-w-4xl mx-auto">
-      <div className="flex items-center justify-between mb-6">
-        <div>
-          <h1 className="text-2xl font-bold flex items-center gap-3">
-            <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-[color:var(--accent-soft)] to-transparent flex items-center justify-center">
-              <Clock size={22} className="text-[color:var(--accent)]" />
-            </div>
-            定时任务
-          </h1>
-          <p className="text-sm text-[color:var(--text-soft)] mt-1">设置周期性自动执行的 Agent 任务</p>
-        </div>
-        <div className="flex items-center gap-2">
-          <Button variant="outline" onClick={loadTasks}><RefreshCw size={14} /> 刷新</Button>
-          <Button onClick={() => openEdit(null)}><Plus size={14} /> 新建任务</Button>
+    <div className="max-w-5xl mx-auto">
+      {/* 渐变 Hero 卡片 */}
+      <div className="relative overflow-hidden rounded-2xl mb-6 p-6 surface-grad">
+        <div className="absolute -right-20 -top-20 w-64 h-64 rounded-full bg-gradient-to-br from-[color:var(--accent)]/30 to-transparent blur-3xl pointer-events-none" />
+        <div className="relative flex items-center gap-4">
+          <div className="w-14 h-14 rounded-2xl bg-gradient-to-br from-[color:var(--accent)] to-[#5e8bff] text-white flex items-center justify-center shadow-glow">
+            <Clock size={26} />
+          </div>
+          <div className="flex-1">
+            <div className="text-2xl font-semibold tracking-tight text-gradient">定时任务</div>
+            <div className="text-sm text-[color:var(--text-soft)]">设置周期性自动执行的 Agent 任务，让 AI 持续为你工作</div>
+          </div>
+          <div className="flex items-center gap-2">
+            <Button variant="outline" onClick={loadTasks}><RefreshCw size={14} /> 刷新</Button>
+            <Button onClick={() => openEdit(null)}><Plus size={14} /> 新建任务</Button>
+          </div>
         </div>
       </div>
+
+      {/* 统计卡片行 */}
+      {tasks.length > 0 && (
+        <div className="grid grid-cols-4 gap-3 mb-6">
+          <MiniStat icon={<CalendarClock size={16} />} label="全部任务" value={stats.total} />
+          <MiniStat icon={<Activity size={16} />} label="已启用" value={stats.active} color="emerald" />
+          <MiniStat icon={<Zap size={16} />} label="运行中" value={stats.running} color="amber" pulse={stats.running > 0} />
+          <MiniStat icon={<TrendingUp size={16} />} label="累计执行" value={stats.totalRuns} />
+        </div>
+      )}
 
       {loading ? (
         <div className="text-center py-20 text-[color:var(--text-faint)]">
@@ -175,21 +203,35 @@ export default function ScheduledTasksPage() {
           {tasks.map(task => {
             const agent = agents.find(a => a.id === task.agent_id);
             const runningInfo = runningTasks[task.id];
+            const countdown = task.enabled && task.next_run_at ? relativeCountdown(task.next_run_at) : null;
             return (
-              <Card key={task.id} className={cn('p-4 transition-all', !task.enabled && 'opacity-60', runningInfo && 'border-[color:var(--accent)]/40 shadow-[0_0_24px_var(--accent-glow)]')}>
+              <Card key={task.id} className={cn(
+                'p-0 transition-all hover:-translate-y-0.5 hover:shadow-glow group overflow-hidden',
+                !task.enabled && 'opacity-60',
+                runningInfo && 'border-[color:var(--accent)]/40 shadow-[0_0_24px_var(--accent-glow)]',
+              )}>
                 {runningInfo && (
-                  <div className="mb-3 flex items-center gap-2 text-xs px-3 py-2 rounded-lg bg-[color:var(--accent-soft)] text-[color:var(--accent)]">
-                    <Loader2 size={14} className="animate-spin" />
+                  <div className="flex items-center gap-2 text-xs px-4 py-2 bg-[color:var(--accent-soft)] text-[color:var(--accent)] border-b border-[color:var(--accent)]/20">
+                    <Loader2 size={12} className="animate-spin" />
                     <span className="font-medium">正在执行…</span>
                     <button
                       onClick={() => handleViewSession(runningInfo.session_id)}
                       className="ml-auto hover:underline inline-flex items-center gap-1"
                     >
-                      <ExternalLink size={12} /> 查看实时输出
+                      <ExternalLink size={11} /> 查看实时输出
                     </button>
                   </div>
                 )}
-                <div className="flex items-start gap-4">
+                <div className="flex items-start gap-4 p-4">
+                  <div className="shrink-0 mt-0.5">
+                    {agent ? (
+                      <AgentAvatar avatar={agent.avatar} name={agent.name} size={40} className="rounded-xl" />
+                    ) : (
+                      <div className="w-10 h-10 rounded-xl bg-[color:var(--accent-soft)] flex items-center justify-center">
+                        <Timer size={20} className="text-[color:var(--accent)]" />
+                      </div>
+                    )}
+                  </div>
                   <div className="flex-1 min-w-0">
                     <div className="flex items-center gap-2">
                       <span className="text-base font-semibold truncate">{task.name}</span>
@@ -201,18 +243,28 @@ export default function ScheduledTasksPage() {
                         <Badge tone="warn">已暂停</Badge>
                       )}
                       {task.stateful && <Badge tone="info">有状态</Badge>}
-                      {task.notify_desktop && <Bell size={13} className="text-[color:var(--text-faint)]" />}
+                      {task.notify_desktop && <Bell size={12} className="text-[color:var(--text-faint)]" />}
                     </div>
                     <p className="text-sm text-[color:var(--text-soft)] mt-1 line-clamp-2">{task.prompt || '(未设置提示词)'}</p>
-                    <div className="flex items-center gap-4 mt-2 text-xs text-[color:var(--text-faint)]">
-                      <span className="inline-flex items-center gap-1"><Clock size={12} /> {formatCron(task.cron_expr)}</span>
-                      {agent && <span>{agent.avatar || '✦'} {agent.name}</span>}
+                    <div className="flex items-center gap-3 mt-2.5 text-[11px] text-[color:var(--text-faint)] flex-wrap">
+                      <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-[color:var(--bg-soft)]">
+                        <Clock size={11} /> {formatCron(task.cron_expr)}
+                      </span>
+                      {agent && (
+                        <span className="inline-flex items-center gap-1">
+                          {agent.name}
+                        </span>
+                      )}
                       <span>已执行 {task.run_count} 次</span>
                       {task.last_run_at && <span>上次: {formatTime(task.last_run_at)}</span>}
-                      {task.next_run_at && task.enabled && <span>下次: {formatTime(task.next_run_at)}</span>}
+                      {countdown && (
+                        <span className="inline-flex items-center gap-1 text-[color:var(--accent)] font-medium">
+                          <Timer size={11} /> {countdown}
+                        </span>
+                      )}
                     </div>
                   </div>
-                  <div className="flex items-center gap-1 shrink-0">
+                  <div className="flex items-center gap-0.5 shrink-0 opacity-0 group-hover:opacity-100 transition">
                     <button
                       onClick={() => handleToggle(task)}
                       className="p-2 rounded-lg hover:bg-[color:var(--bg-soft)] transition"
@@ -224,7 +276,7 @@ export default function ScheduledTasksPage() {
                     </button>
                     <button
                       onClick={() => handleTrigger(task)}
-                      className="p-2 rounded-lg hover:bg-[color:var(--bg-soft)] transition text-[color:var(--text-soft)]"
+                      className="p-2 rounded-lg hover:bg-amber-500/10 transition text-[color:var(--text-soft)] hover:text-amber-500"
                       title="立即执行"
                     >
                       <Zap size={16} />
@@ -259,42 +311,49 @@ export default function ScheduledTasksPage() {
       )}
 
       {/* 创建/编辑弹窗 */}
-      <Modal open={editOpen} onClose={() => { setEditOpen(false); setEditTask(null); }} title={editTask?.id ? '编辑定时任务' : '新建定时任务'} width={540}>
+      <Modal open={editOpen} onClose={() => { setEditOpen(false); setEditTask(null); }} title={editTask?.id ? '编辑定时任务' : '新建定时任务'} width={540} footer={
+        <div className="flex gap-2">
+          <Button variant="outline" onClick={() => { setEditOpen(false); setEditTask(null); }}>取消</Button>
+          <Button onClick={handleSave} disabled={!editTask?.name || !editTask?.cron_expr}>保存</Button>
+        </div>
+      }>
         {editTask && (
           <div className="space-y-4">
-            <div>
-              <label className="block text-sm font-medium text-[color:var(--text-soft)] mb-1">任务名称</label>
-              <Input
-                value={editTask.name}
-                onChange={e => setEditTask({ ...editTask, name: e.target.value })}
-                placeholder="例如：每日工作汇总"
-              />
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <label className="block text-xs font-medium text-[color:var(--text-soft)] mb-1">任务名称</label>
+                <Input
+                  value={editTask.name}
+                  onChange={e => setEditTask({ ...editTask, name: e.target.value })}
+                  placeholder="例如：每日工作汇总"
+                />
+              </div>
+              <div>
+                <label className="block text-xs font-medium text-[color:var(--text-soft)] mb-1">使用智能体</label>
+                <Select
+                  value={editTask.agent_id || 0}
+                  onChange={e => setEditTask({ ...editTask, agent_id: parseInt(e.target.value) })}
+                >
+                  {agents.map(a => {
+                    const isEmoji = a.avatar && a.avatar.length <= 8 && !a.avatar.startsWith('/api/uploads/') && !a.avatar.startsWith('http');
+                    return <option key={a.id} value={a.id}>{isEmoji ? a.avatar : '✦'} {a.name}</option>;
+                  })}
+                </Select>
+              </div>
             </div>
             <div>
-              <label className="block text-sm font-medium text-[color:var(--text-soft)] mb-1">任务提示词</label>
+              <label className="block text-xs font-medium text-[color:var(--text-soft)] mb-1">任务提示词</label>
               <textarea
                 value={editTask.prompt}
                 onChange={e => setEditTask({ ...editTask, prompt: e.target.value })}
                 placeholder="告诉 Agent 需要做什么…"
-                rows={4}
-                className="w-full px-3 py-2 rounded-lg border text-sm bg-[color:var(--bg-elev)] text-[color:var(--text)] border-[color:var(--line)] focus:border-[color:var(--accent)]/60 focus:outline-none"
+                rows={3}
+                className="w-full px-3 py-2 rounded-lg border text-sm bg-[color:var(--bg-elev)] text-[color:var(--text)] border-[color:var(--line)] focus:border-[color:var(--accent)]/60 focus:outline-none resize-none"
               />
             </div>
             <div>
-              <label className="block text-sm font-medium text-[color:var(--text-soft)] mb-1">使用智能体</label>
-              <select
-                value={editTask.agent_id || 0}
-                onChange={e => setEditTask({ ...editTask, agent_id: parseInt(e.target.value) })}
-                className="w-full px-3 py-2 rounded-lg border text-sm bg-[color:var(--bg-elev)] text-[color:var(--text)] border-[color:var(--line)] focus:outline-none"
-              >
-                {agents.map(a => (
-                  <option key={a.id} value={a.id}>{a.avatar || '✦'} {a.name}</option>
-                ))}
-              </select>
-            </div>
-            <div>
-              <label className="block text-sm font-medium text-[color:var(--text-soft)] mb-1">执行频率</label>
-              <select
+              <label className="block text-xs font-medium text-[color:var(--text-soft)] mb-1">执行频率</label>
+              <Select
                 value={isCustomCron ? 'custom' : editTask.cron_expr}
                 onChange={e => {
                   if (e.target.value === 'custom') {
@@ -303,12 +362,9 @@ export default function ScheduledTasksPage() {
                     setEditTask({ ...editTask, cron_expr: e.target.value });
                   }
                 }}
-                className="w-full px-3 py-2 rounded-lg border text-sm bg-[color:var(--bg-elev)] text-[color:var(--text)] border-[color:var(--line)] focus:outline-none"
               >
-                {SCHEDULE_PRESETS.map(p => (
-                  <option key={p.value} value={p.value}>{p.label}</option>
-                ))}
-              </select>
+                {SCHEDULE_PRESETS.map(p => <option key={p.value} value={p.value}>{p.label}</option>)}
+              </Select>
               {(isCustomCron || editTask.cron_expr === '') && (
                 <Input
                   value={editTask.cron_expr}
@@ -319,39 +375,35 @@ export default function ScheduledTasksPage() {
               )}
             </div>
             <div className="flex items-center gap-6">
-              <label className="flex items-center gap-2 cursor-pointer">
+              <label className="flex items-center gap-2 cursor-pointer select-none">
                 <input
                   type="checkbox"
                   checked={editTask.stateful}
                   onChange={e => setEditTask({ ...editTask, stateful: e.target.checked })}
-                  className="accent-[var(--accent)]"
+                  className="accent-[var(--accent)] w-3.5 h-3.5"
                 />
                 <span className="text-sm">有状态（保持同一会话）</span>
               </label>
-              <label className="flex items-center gap-2 cursor-pointer">
+              <label className="flex items-center gap-2 cursor-pointer select-none">
                 <input
                   type="checkbox"
                   checked={editTask.notify_desktop !== false}
                   onChange={e => setEditTask({ ...editTask, notify_desktop: e.target.checked })}
-                  className="accent-[var(--accent)]"
+                  className="accent-[var(--accent)] w-3.5 h-3.5"
                 />
                 <span className="text-sm">完成后通知</span>
               </label>
             </div>
             {editTask.stateful && (
-              <p className="text-xs text-[color:var(--text-faint)] bg-[color:var(--bg-soft)] p-2 rounded-lg">
+              <p className="text-xs text-[color:var(--text-faint)] bg-[color:var(--bg-soft)] p-2.5 rounded-lg">
                 有状态模式下，每次执行会复用同一会话，Agent 可以记住上一次执行的内容。
               </p>
             )}
-            <div className="flex justify-end gap-2 pt-2">
-              <Button variant="outline" onClick={() => { setEditOpen(false); setEditTask(null); }}>取消</Button>
-              <Button onClick={handleSave} disabled={!editTask.name || !editTask.cron_expr}>保存</Button>
-            </div>
           </div>
         )}
       </Modal>
 
-      {/* 执行记录弹窗 */}
+      {/* 执行记录弹窗（时间线风格） */}
       <Modal open={!!runsOpen} onClose={() => { setRunsOpen(null); setRuns([]); }} title={`执行记录 — ${runsOpen?.name || ''}`} width={600}>
         {runsLoading ? (
           <div className="text-center py-10 text-[color:var(--text-faint)]">
@@ -363,39 +415,43 @@ export default function ScheduledTasksPage() {
             暂无执行记录
           </div>
         ) : (
-          <div className="space-y-2 max-h-[400px] overflow-auto scrollable">
-            {runs.map(run => (
-              <div key={run.id} className="flex items-start gap-3 p-3 rounded-lg bg-[color:var(--bg-soft)] border border-[color:var(--line)]">
-                <div className="mt-0.5">
-                  {run.status === 'completed' && <CheckCircle2 size={16} className="text-emerald-500" />}
-                  {run.status === 'failed' && <XCircle size={16} className="text-red-500" />}
-                  {run.status === 'running' && <Loader2 size={16} className="text-[color:var(--accent)] animate-spin" />}
-                </div>
-                <div className="flex-1 min-w-0">
-                  <div className="flex items-center gap-2 text-sm">
-                    <span className="font-medium">{formatTime(run.started_at)}</span>
-                    <Badge tone={run.status === 'completed' ? 'success' : run.status === 'failed' ? 'error' : 'info'}>
-                      {run.status === 'completed' ? '完成' : run.status === 'failed' ? '失败' : '运行中'}
-                    </Badge>
-                    {run.finished_at && (
-                      <span className="text-xs text-[color:var(--text-faint)]">
-                        耗时 {((new Date(run.finished_at) - new Date(run.started_at)) / 1000).toFixed(1)}s
-                      </span>
-                    )}
+          <div className="relative pl-6">
+            <div className="absolute left-2.5 top-0 bottom-0 w-px bg-[color:var(--line)]" />
+            <div className="space-y-0">
+              {runs.map((run, i) => (
+                <div key={run.id} className="relative pb-4 last:pb-0">
+                  <div className={cn(
+                    'absolute -left-[15px] top-1 w-3 h-3 rounded-full border-2 bg-[color:var(--bg)]',
+                    run.status === 'completed' ? 'border-emerald-500' : run.status === 'failed' ? 'border-red-500' : 'border-[color:var(--accent)]',
+                  )} />
+                  <div className="flex items-start gap-3 p-3 rounded-lg bg-[color:var(--bg-soft)] hover:bg-[color:var(--bg-elev)] transition ml-2">
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-center gap-2 text-sm">
+                        <span className="font-medium">{formatTime(run.started_at)}</span>
+                        <Badge tone={run.status === 'completed' ? 'success' : run.status === 'failed' ? 'error' : 'info'}>
+                          {run.status === 'completed' ? '完成' : run.status === 'failed' ? '失败' : '运行中'}
+                        </Badge>
+                        {run.finished_at && (
+                          <span className="text-[11px] text-[color:var(--text-faint)]">
+                            耗时 {((new Date(run.finished_at) - new Date(run.started_at)) / 1000).toFixed(1)}s
+                          </span>
+                        )}
+                      </div>
+                      {run.summary && (
+                        <p className="text-xs text-[color:var(--text-soft)] mt-1 line-clamp-2">{run.summary}</p>
+                      )}
+                    </div>
+                    <button
+                      onClick={() => handleViewSession(run.session_id)}
+                      className="p-1.5 rounded-lg hover:bg-[color:var(--accent-soft)] transition text-[color:var(--text-faint)] hover:text-[color:var(--accent)] shrink-0"
+                      title="查看会话"
+                    >
+                      <ExternalLink size={14} />
+                    </button>
                   </div>
-                  {run.summary && (
-                    <p className="text-xs text-[color:var(--text-soft)] mt-1 line-clamp-3">{run.summary}</p>
-                  )}
                 </div>
-                <button
-                  onClick={() => handleViewSession(run.session_id)}
-                  className="p-1.5 rounded-lg hover:bg-[color:var(--bg-elev)] transition text-[color:var(--text-faint)] hover:text-[color:var(--accent)] shrink-0"
-                  title="查看会话"
-                >
-                  <ExternalLink size={14} />
-                </button>
-              </div>
-            ))}
+              ))}
+            </div>
           </div>
         )}
       </Modal>
@@ -410,6 +466,26 @@ export default function ScheduledTasksPage() {
           <Button className="bg-red-600 hover:bg-red-500 text-white" onClick={() => handleDelete(deleteConfirm.id)}>删除</Button>
         </div>
       </Modal>
+    </div>
+  );
+}
+
+function MiniStat({ icon, label, value, color, pulse }) {
+  return (
+    <div className="flex items-center gap-3 px-4 py-3 rounded-xl border border-[color:var(--line)] bg-[color:var(--bg-elev)]">
+      <div className={cn(
+        'w-8 h-8 rounded-lg flex items-center justify-center shrink-0',
+        color === 'emerald' ? 'bg-emerald-500/10 text-emerald-500' :
+        color === 'amber' ? 'bg-amber-500/10 text-amber-500' :
+        'bg-[color:var(--accent-soft)] text-[color:var(--accent)]',
+        pulse && 'animate-pulse',
+      )}>
+        {icon}
+      </div>
+      <div>
+        <div className="text-lg font-bold leading-tight">{value}</div>
+        <div className="text-[10px] text-[color:var(--text-faint)] uppercase tracking-wider">{label}</div>
+      </div>
     </div>
   );
 }

@@ -23,12 +23,12 @@ func ListSessions(c *gin.Context) {
 	if agentIDStr != "" {
 		agentID, _ := strconv.ParseInt(agentIDStr, 10, 64)
 		rows, err = db.DB.Query(`
-			SELECT id, title, message_count, COALESCE(agent_id,0), COALESCE(pinned,0), COALESCE(folder,''), created_at, updated_at
+			SELECT id, title, message_count, COALESCE(agent_id,0), COALESCE(pinned,0), COALESCE(folder,''), COALESCE(permission_mode,'trust'), created_at, updated_at
 			FROM sessions WHERE COALESCE(agent_id,0)=? AND COALESCE(is_a2a,0)=0 ORDER BY COALESCE(pinned,0) DESC, updated_at DESC
 		`, agentID)
 	} else {
 		rows, err = db.DB.Query(`
-			SELECT id, title, message_count, COALESCE(agent_id,0), COALESCE(pinned,0), COALESCE(folder,''), created_at, updated_at
+			SELECT id, title, message_count, COALESCE(agent_id,0), COALESCE(pinned,0), COALESCE(folder,''), COALESCE(permission_mode,'trust'), created_at, updated_at
 			FROM sessions WHERE COALESCE(is_a2a,0)=0 ORDER BY COALESCE(pinned,0) DESC, updated_at DESC
 		`)
 	}
@@ -42,7 +42,7 @@ func ListSessions(c *gin.Context) {
 	sessions := make([]model.Session, 0)
 	for rows.Next() {
 		var s model.Session
-		if err := rows.Scan(&s.ID, &s.Title, &s.MessageCount, &s.AgentID, &s.Pinned, &s.Folder, &s.CreatedAt, &s.UpdatedAt); err != nil {
+		if err := rows.Scan(&s.ID, &s.Title, &s.MessageCount, &s.AgentID, &s.Pinned, &s.Folder, &s.PermissionMode, &s.CreatedAt, &s.UpdatedAt); err != nil {
 			continue
 		}
 		sessions = append(sessions, s)
@@ -53,22 +53,26 @@ func ListSessions(c *gin.Context) {
 // CreateSession POST /api/sessions
 func CreateSession(c *gin.Context) {
 	var body struct {
-		Title   string `json:"title"`
-		AgentID int64  `json:"agent_id"`
+		Title          string `json:"title"`
+		AgentID        int64  `json:"agent_id"`
+		PermissionMode string `json:"permission_mode"`
 	}
 	_ = c.ShouldBindJSON(&body)
 	if body.Title == "" {
 		body.Title = "新对话"
 	}
+	if body.PermissionMode == "" {
+		body.PermissionMode = "trust"
+	}
 
-	res, err := db.DB.Exec(`INSERT INTO sessions (title, agent_id) VALUES (?,?)`, body.Title, body.AgentID)
+	res, err := db.DB.Exec(`INSERT INTO sessions (title, agent_id, permission_mode) VALUES (?,?,?)`, body.Title, body.AgentID, body.PermissionMode)
 	if err != nil {
 		slog.Warn("create error", "err", err)
 		c.Status(http.StatusInternalServerError)
 		return
 	}
 	id, _ := res.LastInsertId()
-	c.JSON(http.StatusOK, gin.H{"id": id, "title": body.Title, "agent_id": body.AgentID})
+	c.JSON(http.StatusOK, gin.H{"id": id, "title": body.Title, "agent_id": body.AgentID, "permission_mode": body.PermissionMode})
 }
 
 // UpdateSession PATCH /api/sessions/:id

@@ -314,6 +314,19 @@ export function AppShell() {
   const logout = useStore((s) => s.logout);
   const addNexusNotif = useStore((s) => s.addNexusNotif);
 
+  // 移动端检测
+  const [isMobile, setIsMobile] = useState(() => typeof window !== 'undefined' && window.innerWidth < 768);
+  useEffect(() => {
+    const check = () => setIsMobile(window.innerWidth < 768);
+    window.addEventListener('resize', check);
+    return () => window.removeEventListener('resize', check);
+  }, []);
+
+  // 移动端自动折叠侧边栏
+  useEffect(() => {
+    if (isMobile && !sidebarCollapsed) toggleSidebar();
+  }, [isMobile]);
+
   const [pendingInvite, setPendingInvite] = useState(null);
   const [inviteAgentId, setInviteAgentId] = useState('');
   const [inviteAgents, setInviteAgents] = useState([]);
@@ -439,22 +452,24 @@ export function AppShell() {
 
   return (
     <div className="h-screen flex flex-col bg-[color:var(--bg)]">
-      {/* 顶部栏：Logo + Tab 导航 + 模型切换 */}
-      <header className="app-drag h-12 flex items-center px-4 border-b border-[color:var(--line)] glass relative shrink-0">
+      {/* 顶部栏 */}
+      <header className={cn(
+        'app-drag flex items-center border-b border-[color:var(--line)] glass relative shrink-0',
+        isMobile ? 'h-11 px-2' : 'h-12 px-4'
+      )}>
         <div className="absolute left-0 right-0 top-0 h-px bg-gradient-to-r from-transparent via-[color:var(--accent)]/40 to-transparent" />
         <div className="absolute left-0 right-0 bottom-0 h-[3px] bg-gradient-to-b from-[color:var(--line)] to-transparent opacity-50 pointer-events-none" />
 
         {/* 左侧：Logo + AgentState */}
-        <div className="flex items-center gap-2 pl-16 shrink-0">
-          <img src="/logo.png" alt="灵犀" className="w-7 h-7 rounded-lg shadow-soft ring-1 ring-[color:var(--accent-soft)]" />
-          <div className="text-sm font-semibold tracking-tight text-gradient">灵犀</div>
-          <div className="ml-2"><AgentStatePill /></div>
+        <div className={cn('flex items-center gap-2 shrink-0', isMobile ? 'pl-1' : 'pl-16')}>
+          <img src="/logo.png" alt="灵犀" className={cn('rounded-lg shadow-soft ring-1 ring-[color:var(--accent-soft)]', isMobile ? 'w-6 h-6' : 'w-7 h-7')} />
+          {!isMobile && <div className="text-sm font-semibold tracking-tight text-gradient">灵犀</div>}
+          <div className={isMobile ? 'ml-0.5' : 'ml-2'}><AgentStatePill /></div>
         </div>
 
-        {/* 左侧拖拽占位 */}
-        <div className="flex-1 min-w-[24px]" />
+        <div className="flex-1 min-w-[8px]" />
 
-        {/* 中间：主导航（图标+文字） */}
+        {/* 主导航 */}
         <nav className="app-no-drag flex items-center justify-center gap-0.5" aria-label="主导航">
           {NAV_TABS.map((tab) => {
             const Icon = tab.icon;
@@ -465,7 +480,8 @@ export function AppShell() {
                 onClick={() => setView(tab.id)}
                 title={tab.label}
                 className={cn(
-                  'relative flex items-center justify-center gap-1 rounded-lg text-xs font-medium transition-all duration-200 px-2.5 py-1.5',
+                  'relative flex items-center justify-center rounded-lg text-xs font-medium transition-all duration-200',
+                  isMobile ? 'p-1.5' : 'gap-1 px-2.5 py-1.5',
                   active
                     ? 'text-[color:var(--accent)]'
                     : 'text-[color:var(--text-soft)] hover:text-[color:var(--text)] hover:bg-[color:var(--bg-soft)]'
@@ -480,51 +496,52 @@ export function AppShell() {
                   />
                 )}
                 <span className="relative z-10 flex items-center gap-1">
-                  <Icon size={14} />
-                  <span>{tab.label}</span>
+                  <Icon size={isMobile ? 16 : 14} />
+                  {!isMobile && <span>{tab.label}</span>}
                 </span>
               </button>
             );
           })}
         </nav>
 
-        {/* 右侧拖拽占位 */}
-        <div className="flex-1 min-w-[24px]" />
+        <div className="flex-1 min-w-[8px]" />
 
-        {/* 右侧：辅助导航（仅图标）+ 路由状态 + 模型切换 + 侧边栏 */}
-        <div className="app-no-drag flex items-center gap-0.5 shrink-0">
-          <div className="flex items-center gap-0.5 mr-2 border-r border-[color:var(--line)] pr-2">
-            {RIGHT_TABS.map((tab) => {
-              const Icon = tab.icon;
-              const active = view === tab.id;
-              return (
-                <button
-                  key={tab.id}
-                  onClick={() => setView(tab.id)}
-                  title={tab.label}
-                  className={cn(
-                    'relative p-1.5 rounded-lg transition-all duration-200',
-                    active
-                      ? 'text-[color:var(--accent)] bg-[color:var(--accent-soft)]'
-                      : 'text-[color:var(--text-faint)] hover:text-[color:var(--text)] hover:bg-[color:var(--bg-soft)]'
-                  )}
-                >
-                  <Icon size={15} />
-                  {tab.id === 'scheduled' && <ScheduledRunningDot />}
-                </button>
-              );
-            })}
-          </div>
-          <RouterPill />
-          <ModelSwitcher />
-          {currentUser && (
+        {/* 右侧 */}
+        <div className="app-no-drag flex items-center gap-1 shrink-0">
+          {!isMobile && (
+            <div className="flex items-center gap-px mr-2 border-r border-[color:var(--line)]/60 pr-2">
+              {RIGHT_TABS.map((tab) => {
+                const Icon = tab.icon;
+                const active = view === tab.id;
+                return (
+                  <button
+                    key={tab.id}
+                    onClick={() => setView(tab.id)}
+                    title={tab.label}
+                    className={cn(
+                      'relative p-1.5 rounded-lg transition-all duration-200',
+                      active
+                        ? 'text-[color:var(--accent)] bg-[color:var(--accent-soft)] shadow-[0_0_8px_var(--accent-glow)]'
+                        : 'text-[color:var(--text-faint)] hover:text-[color:var(--text)] hover:bg-[color:var(--bg-soft)]'
+                    )}
+                  >
+                    <Icon size={15} />
+                    {tab.id === 'scheduled' && <ScheduledRunningDot />}
+                  </button>
+                );
+              })}
+            </div>
+          )}
+          {!isMobile && <RouterPill />}
+          {!isMobile && <ModelSwitcher />}
+          {!isMobile && currentUser && (
             <UserAvatarMenu
               user={currentUser}
               onLogout={logout}
               onSettings={() => { setView('settings'); useStore.getState().setSettingsTab('account'); }}
             />
           )}
-          {showSidebar && (
+          {showSidebar && !isMobile && (
             <button
               onClick={toggleSidebar}
               className="p-1.5 rounded-lg text-[color:var(--text-faint)] hover:text-[color:var(--text)] hover:bg-[color:var(--bg-soft)] transition"
@@ -533,12 +550,20 @@ export function AppShell() {
               {sidebarCollapsed ? <PanelLeftOpen size={16} /> : <PanelLeftClose size={16} />}
             </button>
           )}
+          {isMobile && (
+            <button
+              onClick={() => setView('settings')}
+              className="p-1.5 rounded-lg text-[color:var(--text-faint)] hover:text-[color:var(--text)]"
+            >
+              <SettingsIcon size={16} />
+            </button>
+          )}
         </div>
       </header>
 
       <div className="flex-1 flex min-h-0">
-        {/* 侧边栏：纯会话列表（仅对话页显示） */}
-        {showSidebar && (
+        {/* 侧边栏（移动端隐藏） */}
+        {showSidebar && !isMobile && (
           <aside className={cn(
             'shrink-0 border-r border-[color:var(--line)] bg-[color:var(--bg-elev)]/80 backdrop-blur flex flex-col transition-all duration-300',
             sidebarCollapsed ? 'w-0 overflow-hidden opacity-0' : 'w-[260px] opacity-100'

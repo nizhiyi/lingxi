@@ -121,6 +121,60 @@ func GroupUsageByModel(days int) ([]map[string]interface{}, error) {
 	return out, nil
 }
 
+func GroupUsageByAgent(days int) ([]map[string]interface{}, error) {
+	rows, err := DB.Query(`
+		SELECT COALESCE(s.agent_id,0), COALESCE(a.name,'默认助理'), COALESCE(a.avatar,''),
+		       COALESCE(SUM(u.input_tokens),0), COALESCE(SUM(u.output_tokens),0),
+		       COALESCE(SUM(u.cost_usd),0), COUNT(1)
+		FROM usage_records u
+		LEFT JOIN sessions s ON s.id=u.session_id
+		LEFT JOIN agents a ON a.id=s.agent_id
+		WHERE u.created_at >= datetime('now', ?)
+		GROUP BY COALESCE(s.agent_id,0)
+		ORDER BY 6 DESC`, "-"+strconv.Itoa(days)+" days")
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := make([]map[string]interface{}, 0)
+	for rows.Next() {
+		var agentID, in, outT, n int64
+		var name, avatar string
+		var cost float64
+		if err := rows.Scan(&agentID, &name, &avatar, &in, &outT, &cost, &n); err != nil {
+			continue
+		}
+		out = append(out, map[string]interface{}{
+			"agent_id": agentID, "agent_name": name, "agent_avatar": avatar,
+			"input_tokens": in, "output_tokens": outT,
+			"cost_usd": cost, "requests": n,
+		})
+	}
+	return out, nil
+}
+
+func GroupUsageCostByDay(days int) ([]map[string]interface{}, error) {
+	rows, err := DB.Query(`
+		SELECT date(created_at) AS d, COALESCE(SUM(cost_usd),0)
+		FROM usage_records
+		WHERE created_at >= datetime('now', ?)
+		GROUP BY d ORDER BY d ASC`, "-"+strconv.Itoa(days)+" days")
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := make([]map[string]interface{}, 0)
+	for rows.Next() {
+		var d string
+		var cost float64
+		if err := rows.Scan(&d, &cost); err != nil {
+			continue
+		}
+		out = append(out, map[string]interface{}{"date": d, "cost_usd": cost})
+	}
+	return out, nil
+}
+
 func ListRecentUsage(limit int) ([]map[string]interface{}, error) {
 	if limit <= 0 || limit > 500 {
 		limit = 100

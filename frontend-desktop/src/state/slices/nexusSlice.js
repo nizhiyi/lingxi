@@ -135,8 +135,8 @@ export const createNexusSlice = (set, get) => ({
     const existing = detail.messages || [];
     const dup = existing.find(
       (m) =>
-        (msg.id && m.id === msg.id) ||
-        (msg.client_msg_id && msg.client_msg_id === m.client_msg_id)
+        (msg.id != null && m.id != null && String(m.id) === String(msg.id)) ||
+        (msg.client_msg_id && m.client_msg_id === msg.client_msg_id),
     );
     if (dup) return;
     set({

@@ -135,6 +135,9 @@ export default function GroupChatView({ roomId, onBack }) {
 
   const composerDisabled = room.status !== 'active';
 
+  const amHost =
+    !!(room.created_by_local && room.host_peer_id === myInstanceID && myInstanceID);
+
   return (
     <div className="flex-1 flex flex-col min-h-0 relative">
       <GroupHeader
@@ -177,6 +180,8 @@ export default function GroupChatView({ roomId, onBack }) {
         room={room}
         members={members}
         onDoubleClickAvatar={handleDoubleClickAvatar}
+        canManageMembers={amHost && room.status === 'active'}
+        onMembersChanged={() => refreshDetail()}
       />
 
       {composerDisabled && (

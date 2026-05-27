@@ -1,9 +1,23 @@
 import { useState, useRef, useEffect, useCallback, useMemo } from 'react';
 import { useStore } from '../state/useStore';
-import { Plus, MessageSquare, Trash2, Search, ChevronDown, Sparkles, Settings as SettingsIcon, Pencil, Pin, CheckSquare, Square, X, BookOpen } from 'lucide-react';
+import { Plus, MessageSquare, Trash2, Search, ChevronDown, Sparkles, Settings as SettingsIcon, Pencil, Pin, CheckSquare, Square, X, BookOpen, Shield, ShieldOff } from 'lucide-react';
 import { Input, Button, Modal } from './primitives';
 import { api } from '../api/client';
 import { cn } from './cn';
+import AgentAvatar from './AgentAvatar';
+
+function relativeTime(ts) {
+  if (!ts) return '';
+  const diff = Date.now() - new Date(ts).getTime();
+  const mins = Math.floor(diff / 60000);
+  if (mins < 1) return '刚刚';
+  if (mins < 60) return `${mins}分钟前`;
+  const hrs = Math.floor(mins / 60);
+  if (hrs < 24) return `${hrs}小时前`;
+  const days = Math.floor(hrs / 24);
+  if (days < 7) return `${days}天前`;
+  return new Date(ts).toLocaleDateString('zh-CN', { month: 'short', day: 'numeric' });
+}
 
 function groupSessionsByDate(sessions) {
   const now = new Date();
@@ -105,9 +119,7 @@ export function SidebarSessions() {
               border border-[color:var(--accent-soft)] hover:border-[color:var(--accent)]/40
               hover:shadow-glow transition text-left"
           >
-            <span className="w-9 h-9 rounded-xl bg-[color:var(--bg-elev)] flex items-center justify-center text-base shrink-0 ring-1 ring-[color:var(--accent-soft)]">
-              {currentAgent.avatar || '✦'}
-            </span>
+            <AgentAvatar avatar={currentAgent.avatar} name={currentAgent.name} size={36} className="shrink-0" />
             <div className="flex-1 min-w-0">
               <div className="text-[10px] uppercase tracking-wide text-[color:var(--text-faint)]">当前智能体</div>
               <div className="text-sm font-semibold truncate text-[color:var(--text)]">{currentAgent.name}</div>
@@ -131,7 +143,7 @@ export function SidebarSessions() {
                           sel ? 'bg-[color:var(--accent-soft)] text-[color:var(--accent)]' : 'hover:bg-[color:var(--bg-soft)]'
                         )}
                       >
-                        <span className="w-7 h-7 rounded-lg bg-[color:var(--bg-soft)] flex items-center justify-center text-sm shrink-0">{a.avatar || '✦'}</span>
+                        <AgentAvatar avatar={a.avatar} name={a.name} size={28} className="shrink-0" />
                         <div className="flex-1 min-w-0">
                           <div className="text-sm font-medium truncate">{a.name}</div>
                           {a.description && <div className="text-[11px] text-[color:var(--text-faint)] truncate">{a.description}</div>}
@@ -172,14 +184,7 @@ export function SidebarSessions() {
         </div>
       ) : (
         <div className="flex items-center gap-1.5">
-          <button
-            onClick={async () => { await createSession(); setView('chat'); }}
-            className="flex-1 flex items-center justify-center gap-2 px-3 h-10 rounded-lg text-white transition-all duration-200
-              bg-gradient-to-r from-[color:var(--accent)] to-[#5e8bff]
-              hover:shadow-[0_8px_24px_var(--accent-glow)] hover:-translate-y-px active:translate-y-0 active:scale-[0.99] shadow-soft"
-          >
-            <Plus size={16} /> 新对话
-          </button>
+          <NewSessionButton createSession={createSession} setView={setView} />
           {sessions.length > 0 && (
             <button
               onClick={() => setBatchMode(true)}
@@ -322,7 +327,11 @@ function SessionItem({ session, active, batchMode, checked, onToggle, onClick, o
         ) : (
           <>
             <div className="text-sm truncate">{session.title || '新对话'}</div>
-            <div className="text-[11px] text-[color:var(--text-faint)] truncate">{session.message_count || 0} 条消息</div>
+            <div className="text-[10px] text-[color:var(--text-faint)] truncate flex items-center gap-1.5">
+              <span>{session.message_count || 0} 条</span>
+              <span className="opacity-50">·</span>
+              <span>{relativeTime(session.updated_at || session.created_at)}</span>
+            </div>
           </>
         )}
       </div>
@@ -352,5 +361,71 @@ function SessionItem({ session, active, batchMode, checked, onToggle, onClick, o
         </div>
       )}
     </div>
+  );
+}
+
+function NewSessionButton({ createSession, setView }) {
+  const [menuPos, setMenuPos] = useState(null);
+  const menuRef = useRef(null);
+
+  useEffect(() => {
+    if (!menuPos) return;
+    const handler = (e) => { if (menuRef.current && !menuRef.current.contains(e.target)) setMenuPos(null); };
+    document.addEventListener('mousedown', handler);
+    return () => document.removeEventListener('mousedown', handler);
+  }, [menuPos]);
+
+  const handleCreate = async (mode) => {
+    setMenuPos(null);
+    await createSession({ permission_mode: mode });
+    setView('chat');
+  };
+
+  const handleContextMenu = (e) => {
+    e.preventDefault();
+    setMenuPos({ x: e.clientX, y: e.clientY });
+  };
+
+  return (
+    <>
+      <button
+        onClick={async () => { await createSession(); setView('chat'); }}
+        onContextMenu={handleContextMenu}
+        className="flex-1 flex items-center justify-center gap-2 px-3 h-10 rounded-lg text-white transition-all duration-200
+          bg-gradient-to-r from-[color:var(--accent)] to-[#5e8bff]
+          hover:shadow-[0_8px_24px_var(--accent-glow)] hover:-translate-y-px active:translate-y-0 active:scale-[0.99] shadow-soft"
+        title="左键新建（放行模式），右键选择模式"
+      >
+        <Plus size={16} /> 新对话
+      </button>
+      {menuPos && (
+        <div
+          ref={menuRef}
+          className="fixed w-52 rounded-lg border border-[color:var(--line)] bg-[color:var(--bg-elev)] shadow-xl z-[9999] py-1 text-sm"
+          style={{ left: menuPos.x, top: menuPos.y }}
+        >
+          <button
+            onClick={() => handleCreate('trust')}
+            className="w-full flex items-center gap-2.5 px-3 py-2 hover:bg-[color:var(--bg-soft)] text-left transition"
+          >
+            <ShieldOff size={14} className="text-emerald-500 shrink-0" />
+            <div>
+              <div className="font-medium text-[color:var(--text)]">完全放行</div>
+              <div className="text-[10px] text-[color:var(--text-faint)]">Agent 自主执行，无需审批</div>
+            </div>
+          </button>
+          <button
+            onClick={() => handleCreate('managed')}
+            className="w-full flex items-center gap-2.5 px-3 py-2 hover:bg-[color:var(--bg-soft)] text-left transition"
+          >
+            <Shield size={14} className="text-amber-500 shrink-0" />
+            <div>
+              <div className="font-medium text-[color:var(--text)]">权限管控</div>
+              <div className="text-[10px] text-[color:var(--text-faint)]">危险操作需人工确认</div>
+            </div>
+          </button>
+        </div>
+      )}
+    </>
   );
 }

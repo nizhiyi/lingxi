@@ -878,3 +878,11 @@ body {
     transition-duration: 0.001ms !important;
   }
 }
+
+/* ══════════════════════════════════════════════════════════════════
+   移动端响应式适配（手机远程访问）
+   ══════════════════════════════════════════════════════════════════ */
+@media (max-width: 768px) {
+  .app-drag { -webkit-app-region: unset !important; }
+  textarea, input[type="text"], input[type="number"] { font-size: 16px !important; }
+}

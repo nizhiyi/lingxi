@@ -101,7 +101,31 @@ func (m *Manager) buildConnector(platform, configJSON string) (Connector, error)
 		return NewFeishuConnector(configJSON)
 	case "wecom":
 		return NewWecomConnector(configJSON, m.ginRouter)
+	case "wecom_webhook":
+		return NewWecomWebhookConnector(configJSON)
 	default:
 		return nil, nil
+	}
+}
+
+// StartWebhook 启动 Webhook 连接器并注册实例（供 handler 调用发送）
+func (m *Manager) StartWebhook(connID int64, platform, configJSON string) error {
+	if platform != "wecom_webhook" {
+		return m.Start(platform, configJSON)
+	}
+	conn, err := NewWecomWebhookConnector(configJSON)
+	if err != nil {
+		return err
+	}
+	RegisterWebhookInstance(connID, conn)
+	return nil
+}
+
+// StopWebhook 停止 Webhook 连接器并注销实例
+func (m *Manager) StopWebhook(connID int64, platform string) {
+	if platform == "wecom_webhook" {
+		UnregisterWebhookInstance(connID)
+	} else {
+		m.Stop(platform)
 	}
 }

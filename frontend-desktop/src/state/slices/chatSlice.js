@@ -530,7 +530,8 @@ export const createChatSlice = (set, get) => ({
       }
       case 'group_member_joined':
       case 'group_member_left':
-      case 'group_status_change': {
+      case 'group_status_change':
+      case 'group_members_sync': {
         state.refreshGroupChats();
         state.refreshActiveGroupRoom();
         break;

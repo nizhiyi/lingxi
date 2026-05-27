@@ -5,7 +5,7 @@ import { api } from '../api/client';
 import { Badge } from './primitives';
 import { cn } from './cn';
 
-// RouterPill 仅在激活档案为 OpenAI 协议时显示，反映 bridge 路由层运行状态
+// RouterPill 仅在激活档案为 OpenAI 协议时显示，反映 Go 代理路由层运行状态
 export function RouterPill() {
   const active = useStore((s) => s.activeProfile);
   const [status, setStatus] = useState(null);

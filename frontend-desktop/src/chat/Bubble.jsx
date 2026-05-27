@@ -5,6 +5,7 @@ import { parseAssistantContent } from './blockUtils';
 import { useStore } from '../state/useStore';
 import { api } from '../api/client';
 import { cn } from '../ui/cn';
+import AgentAvatarComponent from '../ui/AgentAvatar';
 
 function parseUserContent(content) {
   if (!content) return { text: '', images: [], files: [] };
@@ -39,19 +40,14 @@ function AgentAvatar() {
   const agents = useStore((s) => s.agents);
   const activeAgentId = useStore((s) => s.activeAgentId);
   const agent = agents.find(a => a.id === activeAgentId);
-  const avatar = agent?.avatar;
 
-  if (avatar && avatar !== '✦') {
-    return (
-      <div className="w-8 h-8 rounded-full bg-gradient-to-br from-[color:var(--accent-soft)] to-transparent flex items-center justify-center shrink-0 text-base ring-1 ring-[color:var(--accent-soft)] self-start mt-0.5">
-        {avatar}
-      </div>
-    );
-  }
   return (
-    <div className="w-8 h-8 rounded-full bg-gradient-to-br from-[color:var(--accent)] to-[#5e8bff] flex items-center justify-center shrink-0 shadow-sm self-start mt-0.5">
-      <Sparkles size={14} className="text-white" />
-    </div>
+    <AgentAvatarComponent
+      avatar={agent?.avatar}
+      name={agent?.name}
+      size={32}
+      className="self-start mt-0.5"
+    />
   );
 }
 

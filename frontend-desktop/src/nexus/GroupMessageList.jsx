@@ -30,7 +30,11 @@ function GroupLiveStream({ streamKey, blocks, members, isMine }) {
           'rounded-lg px-3 py-1.5 text-sm leading-relaxed border border-dashed prose-a2a min-h-[2em]',
           'bg-white/60 dark:bg-[color:var(--bg-elev)]/60 border-[color:var(--accent)]/30'
         )}>
-          <BlocksRenderer blocks={(blocks || []).filter((b) => b.type !== 'thinking')} live hideThinking />
+          <BlocksRenderer
+            blocks={(blocks || []).filter((b) => b.type !== 'thinking' && b.type !== 'tool')}
+            live
+            hideThinking
+          />
         </div>
       </div>
     </div>

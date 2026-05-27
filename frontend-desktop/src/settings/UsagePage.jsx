@@ -1,13 +1,18 @@
 import { useCallback, useEffect, useState } from 'react';
 import {
   ResponsiveContainer, BarChart, Bar, XAxis, YAxis, Tooltip,
-  CartesianGrid, Legend,
+  CartesianGrid, Legend, LineChart, Line, AreaChart, Area,
 } from 'recharts';
-import { Coins, Cpu, Clock, BarChart3, Wallet, RefreshCw, AlertTriangle, Bell } from 'lucide-react';
+import {
+  Coins, Cpu, Clock, BarChart3, Wallet, RefreshCw, AlertTriangle, Bell,
+  TrendingUp, Bot, ArrowUpRight, ArrowDownRight, Minus,
+} from 'lucide-react';
 import { api } from '../api/client';
 import { Button, Card, Badge, Select, Input } from '../ui/primitives';
 import { formatNum } from '../chat/blockUtils';
 import { useStore } from '../state/useStore';
+import { cn } from '../ui/cn';
+import AgentAvatar from '../ui/AgentAvatar';
 
 const RANGES = [
   { v: 'today', label: '今日' },
@@ -41,10 +46,7 @@ export function UsagePage() {
     setData(u);
   }, [range]);
 
-  useEffect(() => {
-    // eslint-disable-next-line react-hooks/set-state-in-effect
-    load();
-  }, [load]);
+  useEffect(() => { load(); }, [load]);
 
   const loadQuota = useCallback(async () => {
     if (!active) return;
@@ -59,11 +61,7 @@ export function UsagePage() {
     }
   }, [active]);
 
-  useEffect(() => {
-    if (!active) return;
-    // eslint-disable-next-line react-hooks/set-state-in-effect
-    loadQuota();
-  }, [active, loadQuota]);
+  useEffect(() => { if (active) loadQuota(); }, [active, loadQuota]);
 
   useEffect(() => {
     if (!data?.today) return;
@@ -83,25 +81,41 @@ export function UsagePage() {
 
   const summary = data?.summary || {};
   const today = data?.today || {};
+  const costTrend = data?.cost_trend || [];
+  const byAgent = data?.by_agent || [];
 
   const dailyPct = budget.dailyLimit > 0 ? Math.min(100, ((today.cost_usd || 0) / budget.dailyLimit) * 100) : 0;
   const monthlyPct = budget.monthlyLimit > 0 ? Math.min(100, ((summary.cost_usd || 0) / budget.monthlyLimit) * 100) : 0;
 
+  const costChange = costTrend.length >= 2
+    ? (costTrend[costTrend.length - 1].cost_usd - costTrend[costTrend.length - 2].cost_usd)
+    : 0;
+
   return (
     <div className="max-w-6xl mx-auto py-6 px-6 space-y-4">
-      <div className="flex items-center justify-between">
-        <div>
-          <h1 className="text-xl font-semibold">用量与计费</h1>
-          <p className="text-sm text-[color:var(--text-soft)] mt-0.5">本地累计每条对话的 token 与费用，并可查询上游账户余额</p>
-        </div>
-        <div className="flex items-center gap-2">
-          <Select value={range} onChange={(e) => setRange(e.target.value)}>
-            {RANGES.map((r) => <option key={r.v} value={r.v}>{r.label}</option>)}
-          </Select>
-          <Button variant="outline" size="md" onClick={load}><RefreshCw size={14} /> 刷新</Button>
+      {/* Hero 渐变卡片 */}
+      <div className="relative overflow-hidden rounded-2xl p-6 surface-grad">
+        <div className="absolute -right-20 -top-20 w-64 h-64 rounded-full bg-gradient-to-br from-[color:var(--accent)]/30 to-transparent blur-3xl pointer-events-none" />
+        <div className="relative flex items-center justify-between">
+          <div className="flex items-center gap-4">
+            <div className="w-14 h-14 rounded-2xl bg-gradient-to-br from-[color:var(--accent)] to-[#5e8bff] text-white flex items-center justify-center shadow-glow">
+              <TrendingUp size={26} />
+            </div>
+            <div>
+              <div className="text-2xl font-semibold tracking-tight text-gradient">用量与计费</div>
+              <p className="text-sm text-[color:var(--text-soft)] mt-0.5">实时追踪 Token 消耗与费用趋势</p>
+            </div>
+          </div>
+          <div className="flex items-center gap-2">
+            <Select value={range} onChange={(e) => setRange(e.target.value)}>
+              {RANGES.map((r) => <option key={r.v} value={r.v}>{r.label}</option>)}
+            </Select>
+            <Button variant="outline" onClick={load}><RefreshCw size={14} /> 刷新</Button>
+          </div>
         </div>
       </div>
 
+      {/* 四格概览 */}
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
         <StatCard icon={<Coins size={18} />} label="本期费用" value={`$${(summary.cost_usd || 0).toFixed(4)}`} sub={`今日 $${(today.cost_usd || 0).toFixed(4)}`} hint={summary.has_estimated ? '含估算' : null} />
         <StatCard icon={<Cpu size={18} />} label="输入 token" value={formatNum(summary.input_tokens || 0)} sub={`今日 ${formatNum(today.input_tokens || 0)}`} />
@@ -109,26 +123,62 @@ export function UsagePage() {
         <StatCard icon={<BarChart3 size={18} />} label="请求数" value={summary.requests || 0} sub={`今日 ${today.requests || 0}`} />
       </div>
 
-      <Card>
-        <div className="flex items-center justify-between mb-2">
-          <div className="font-medium">每日趋势</div>
-          <Badge tone="default">USD</Badge>
-        </div>
-        <div style={{ width: '100%', height: 240 }}>
-          <ResponsiveContainer>
-            <BarChart data={data?.by_day || []}>
-              <CartesianGrid strokeDasharray="3 3" stroke="rgba(127,127,127,0.15)" />
-              <XAxis dataKey="date" tick={{ fontSize: 11 }} />
-              <YAxis tick={{ fontSize: 11 }} />
-              <Tooltip contentStyle={{ background: 'var(--bg-elev)', border: '1px solid var(--line)' }} />
-              <Legend />
-              <Bar dataKey="input_tokens" name="输入" fill="#7c5cff" />
-              <Bar dataKey="output_tokens" name="输出" fill="#10b981" />
-            </BarChart>
-          </ResponsiveContainer>
-        </div>
-      </Card>
+      {/* 费用趋势折线图 + Token 日柱图 并排 */}
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-3">
+        <Card>
+          <div className="flex items-center justify-between mb-2">
+            <div className="font-medium flex items-center gap-2">
+              <TrendingUp size={14} className="text-[color:var(--accent)]" />
+              费用趋势
+            </div>
+            {costChange !== 0 && (
+              <div className={cn('text-xs font-medium flex items-center gap-0.5', costChange > 0 ? 'text-red-500' : 'text-emerald-500')}>
+                {costChange > 0 ? <ArrowUpRight size={12} /> : <ArrowDownRight size={12} />}
+                ${Math.abs(costChange).toFixed(4)}
+              </div>
+            )}
+          </div>
+          <div style={{ width: '100%', height: 200 }}>
+            <ResponsiveContainer>
+              <AreaChart data={costTrend}>
+                <defs>
+                  <linearGradient id="costGrad" x1="0" y1="0" x2="0" y2="1">
+                    <stop offset="5%" stopColor="var(--accent)" stopOpacity={0.3} />
+                    <stop offset="95%" stopColor="var(--accent)" stopOpacity={0} />
+                  </linearGradient>
+                </defs>
+                <CartesianGrid strokeDasharray="3 3" stroke="rgba(127,127,127,0.1)" />
+                <XAxis dataKey="date" tick={{ fontSize: 10 }} />
+                <YAxis tick={{ fontSize: 10 }} tickFormatter={v => `$${v.toFixed(2)}`} />
+                <Tooltip contentStyle={{ background: 'var(--bg-elev)', border: '1px solid var(--line)', fontSize: 12 }} formatter={v => [`$${v.toFixed(4)}`, '费用']} />
+                <Area type="monotone" dataKey="cost_usd" stroke="var(--accent)" fill="url(#costGrad)" strokeWidth={2} />
+              </AreaChart>
+            </ResponsiveContainer>
+          </div>
+        </Card>
 
+        <Card>
+          <div className="flex items-center justify-between mb-2">
+            <div className="font-medium">Token 日用量</div>
+            <Badge tone="default">USD</Badge>
+          </div>
+          <div style={{ width: '100%', height: 200 }}>
+            <ResponsiveContainer>
+              <BarChart data={data?.by_day || []}>
+                <CartesianGrid strokeDasharray="3 3" stroke="rgba(127,127,127,0.1)" />
+                <XAxis dataKey="date" tick={{ fontSize: 10 }} />
+                <YAxis tick={{ fontSize: 10 }} />
+                <Tooltip contentStyle={{ background: 'var(--bg-elev)', border: '1px solid var(--line)', fontSize: 12 }} />
+                <Legend wrapperStyle={{ fontSize: 11 }} />
+                <Bar dataKey="input_tokens" name="输入" fill="#7c5cff" radius={[3,3,0,0]} />
+                <Bar dataKey="output_tokens" name="输出" fill="#10b981" radius={[3,3,0,0]} />
+              </BarChart>
+            </ResponsiveContainer>
+          </div>
+        </Card>
+      </div>
+
+      {/* 按模型 + 按智能体 并排 */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-3">
         <Card>
           <div className="font-medium mb-2">按模型聚合</div>
@@ -154,6 +204,44 @@ export function UsagePage() {
           )}
         </Card>
 
+        <Card>
+          <div className="font-medium mb-2 flex items-center gap-2">
+            <Bot size={14} className="text-[color:var(--accent)]" />
+            按智能体聚合
+          </div>
+          {byAgent.length === 0 ? (
+            <div className="py-6 text-center text-sm text-[color:var(--text-faint)]">暂无数据</div>
+          ) : (
+            <div className="space-y-2">
+              {byAgent.map((row) => {
+                const totalCost = (data?.summary?.cost_usd || 1);
+                const pct = totalCost > 0 ? Math.round((row.cost_usd / totalCost) * 100) : 0;
+                return (
+                  <div key={row.agent_id} className="flex items-center gap-3">
+                    <AgentAvatar avatar={row.agent_avatar} name={row.agent_name} size={28} className="rounded-lg shrink-0" />
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-center justify-between">
+                        <span className="text-sm font-medium truncate">{row.agent_name}</span>
+                        <span className="text-sm font-semibold">${(row.cost_usd || 0).toFixed(4)}</span>
+                      </div>
+                      <div className="h-1.5 bg-[color:var(--bg-soft)] rounded-full overflow-hidden mt-1">
+                        <div
+                          className="h-full bg-gradient-to-r from-[color:var(--accent)] to-[#5e8bff] rounded-full transition-all"
+                          style={{ width: `${pct}%` }}
+                        />
+                      </div>
+                    </div>
+                    <div className="text-xs text-[color:var(--text-faint)] w-10 text-right">{pct}%</div>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </Card>
+      </div>
+
+      {/* 额度 + 预算 并排 */}
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-3">
         <Card>
           <div className="flex items-center justify-between mb-2">
             <div className="font-medium flex items-center gap-2"><Wallet size={16} /> 上游账户额度</div>
@@ -183,57 +271,42 @@ export function UsagePage() {
             </div>
           )}
         </Card>
+
+        <Card>
+          <div className="flex items-center gap-2 mb-3">
+            <Bell size={16} className="text-[color:var(--accent)]" />
+            <div className="font-medium">预算预警</div>
+          </div>
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+            <div>
+              <label className="text-xs text-[color:var(--text-faint)] mb-1 block">每日预算</label>
+              <Input type="number" min="0" step="0.5" value={budget.dailyLimit || ''} placeholder="0=不限" onChange={(e) => handleBudgetChange('dailyLimit', e.target.value)} />
+              {budget.dailyLimit > 0 && (
+                <ProgressMini value={dailyPct} label={`$${(today.cost_usd || 0).toFixed(4)}`} />
+              )}
+            </div>
+            <div>
+              <label className="text-xs text-[color:var(--text-faint)] mb-1 block">本期预算</label>
+              <Input type="number" min="0" step="1" value={budget.monthlyLimit || ''} placeholder="0=不限" onChange={(e) => handleBudgetChange('monthlyLimit', e.target.value)} />
+              {budget.monthlyLimit > 0 && (
+                <ProgressMini value={monthlyPct} label={`$${(summary.cost_usd || 0).toFixed(4)}`} />
+              )}
+            </div>
+            <div>
+              <label className="text-xs text-[color:var(--text-faint)] mb-1 block">预警阈值</label>
+              <Input type="number" min="10" max="100" step="5" value={budget.alertThreshold} onChange={(e) => handleBudgetChange('alertThreshold', e.target.value)} />
+              <div className="text-[10px] text-[color:var(--text-faint)] mt-1">达到此%时弹出提醒</div>
+            </div>
+          </div>
+          {(dailyPct >= (budget.alertThreshold || 80) || monthlyPct >= (budget.alertThreshold || 80)) && (
+            <div className="mt-3 px-3 py-2 rounded-lg bg-amber-500/10 border border-amber-500/30 flex items-center gap-2 text-sm text-amber-600 dark:text-amber-400">
+              <AlertTriangle size={16} /> 费用已接近或超过预算阈值
+            </div>
+          )}
+        </Card>
       </div>
 
-      <Card>
-        <div className="flex items-center gap-2 mb-3">
-          <Bell size={16} className="text-[color:var(--accent)]" />
-          <div className="font-medium">预算预警</div>
-        </div>
-        <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-          <div>
-            <label className="text-xs text-[color:var(--text-faint)] mb-1 block">每日预算 (USD)</label>
-            <Input type="number" min="0" step="0.5" value={budget.dailyLimit || ''} placeholder="0 = 不限制" onChange={(e) => handleBudgetChange('dailyLimit', e.target.value)} />
-            {budget.dailyLimit > 0 && (
-              <div className="mt-2">
-                <div className="flex justify-between text-xs text-[color:var(--text-faint)] mb-1">
-                  <span>今日 ${(today.cost_usd || 0).toFixed(4)}</span>
-                  <span>{dailyPct.toFixed(0)}%</span>
-                </div>
-                <div className="h-1.5 bg-[color:var(--bg-soft)] rounded-full overflow-hidden">
-                  <div className={`h-full rounded-full transition-all ${dailyPct >= 80 ? 'bg-red-500' : dailyPct >= 50 ? 'bg-amber-500' : 'bg-emerald-500'}`} style={{ width: `${dailyPct}%` }} />
-                </div>
-              </div>
-            )}
-          </div>
-          <div>
-            <label className="text-xs text-[color:var(--text-faint)] mb-1 block">本期预算 (USD)</label>
-            <Input type="number" min="0" step="1" value={budget.monthlyLimit || ''} placeholder="0 = 不限制" onChange={(e) => handleBudgetChange('monthlyLimit', e.target.value)} />
-            {budget.monthlyLimit > 0 && (
-              <div className="mt-2">
-                <div className="flex justify-between text-xs text-[color:var(--text-faint)] mb-1">
-                  <span>本期 ${(summary.cost_usd || 0).toFixed(4)}</span>
-                  <span>{monthlyPct.toFixed(0)}%</span>
-                </div>
-                <div className="h-1.5 bg-[color:var(--bg-soft)] rounded-full overflow-hidden">
-                  <div className={`h-full rounded-full transition-all ${monthlyPct >= 80 ? 'bg-red-500' : monthlyPct >= 50 ? 'bg-amber-500' : 'bg-emerald-500'}`} style={{ width: `${monthlyPct}%` }} />
-                </div>
-              </div>
-            )}
-          </div>
-          <div>
-            <label className="text-xs text-[color:var(--text-faint)] mb-1 block">预警阈值 (%)</label>
-            <Input type="number" min="10" max="100" step="5" value={budget.alertThreshold} onChange={(e) => handleBudgetChange('alertThreshold', e.target.value)} />
-            <div className="text-xs text-[color:var(--text-faint)] mt-1.5">达到预算的此比例时弹出提醒</div>
-          </div>
-        </div>
-        {(dailyPct >= (budget.alertThreshold || 80) || monthlyPct >= (budget.alertThreshold || 80)) && (
-          <div className="mt-3 px-3 py-2 rounded-lg bg-amber-500/10 border border-amber-500/30 flex items-center gap-2 text-sm text-amber-600 dark:text-amber-400">
-            <AlertTriangle size={16} /> 当前费用已接近或超过预算阈值，请注意控制用量
-          </div>
-        )}
-      </Card>
-
+      {/* 最近请求 */}
       <Card>
         <div className="font-medium mb-2">最近请求</div>
         {(data?.recent || []).length === 0 ? (
@@ -289,6 +362,23 @@ function StatCard({ icon, label, value, sub, hint }) {
   );
 }
 
+function ProgressMini({ value, label }) {
+  return (
+    <div className="mt-2">
+      <div className="flex justify-between text-[10px] text-[color:var(--text-faint)] mb-0.5">
+        <span>{label}</span>
+        <span>{value.toFixed(0)}%</span>
+      </div>
+      <div className="h-1.5 bg-[color:var(--bg-soft)] rounded-full overflow-hidden">
+        <div
+          className={cn('h-full rounded-full transition-all', value >= 80 ? 'bg-red-500' : value >= 50 ? 'bg-amber-500' : 'bg-emerald-500')}
+          style={{ width: `${value}%` }}
+        />
+      </div>
+    </div>
+  );
+}
+
 function Row({ label, value }) {
   return (
     <div className="flex items-center justify-between border-b border-[color:var(--line)] py-1.5 last:border-0">
@@ -298,7 +388,6 @@ function Row({ label, value }) {
   );
 }
 
-// DashScope 等供应商的余额接口对个人账户常返回 HTTP 404；这里转成更友好的提示。
 function friendlyQuotaReason(raw) {
   const s = String(raw || '');
   if (/HTTP\s*404/i.test(s)) return '该账号或密钥未开通余额查询权限（可正常调用模型）';

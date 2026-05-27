@@ -56,7 +56,7 @@ func TranscribeAudio(c *gin.Context) {
 	}
 
 	// 回退：远端 Whisper API
-	_, _, _, baseURL, token, protocol, _ := activeProfileSnapshot()
+	_, _, _, baseURL, token, protocol, _, _, _ := activeProfileSnapshot()
 	if token == "" {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "语音识别不可用：请先激活一个模型接入点（设置 > 连接与接入点）"})
 		return

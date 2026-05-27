@@ -122,6 +122,12 @@ var upgrader = websocket.Upgrader{
 			strings.HasPrefix(origin, "app://") {
 			return true
 		}
+		// 允许局域网 IP 访问（手机远程控制等场景）
+		if strings.HasPrefix(origin, "http://10.") ||
+			strings.HasPrefix(origin, "http://172.") ||
+			strings.HasPrefix(origin, "http://192.168.") {
+			return true
+		}
 		slog.Warn("rejected origin", "value", origin)
 		return false
 	},

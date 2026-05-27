@@ -1,11 +1,13 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, lazy, Suspense } from 'react';
 import { useStore } from '../state/useStore';
-import { Cpu, BarChart3, Palette, BrainCircuit, Wifi, Info, UserCircle, LogOut, Shield, Calendar } from 'lucide-react';
+import { Cpu, BarChart3, Palette, BrainCircuit, Wifi, Info, UserCircle, LogOut, Shield, Calendar, ShieldCheck, Smartphone } from 'lucide-react';
 import { ProfilesPage } from './ProfilesPage';
 import { UsagePage } from './UsagePage';
 import { AppearancePage } from './AppearancePage';
 import { MemoryPage } from './MemoryPage';
 import NexusSettingsPage from './NexusSettingsPage';
+const PermissionsPage = lazy(() => import('./PermissionsPage'));
+const RemoteAccessPage = lazy(() => import('./RemoteAccessPage'));
 import { cn } from '../ui/cn';
 import { Button, Card } from '../ui/primitives';
 
@@ -13,6 +15,8 @@ const TABS = [
   { id: 'account',    label: '账号',         icon: UserCircle },
   { id: 'profiles',   label: '模型与接入点', icon: Cpu },
   { id: 'memory',     label: '长期记忆',     icon: BrainCircuit },
+  { id: 'permissions',label: '权限与审批',   icon: ShieldCheck },
+  { id: 'remote',     label: '远程访问',     icon: Smartphone },
   { id: 'nexus',      label: '网络与协作',   icon: Wifi },
   { id: 'usage',      label: '用量',         icon: BarChart3 },
   { id: 'appearance', label: '外观',         icon: Palette },
@@ -156,6 +160,8 @@ export function SettingsPage() {
         {tab === 'account' && <AccountPage />}
         {tab === 'profiles' && <ProfilesPage />}
         {tab === 'memory' && <MemoryPage />}
+        {tab === 'permissions' && <Suspense fallback={<div className="p-6 text-sm text-[color:var(--text-faint)]">加载中…</div>}><PermissionsPage /></Suspense>}
+        {tab === 'remote' && <Suspense fallback={<div className="p-6 text-sm text-[color:var(--text-faint)]">加载中…</div>}><RemoteAccessPage /></Suspense>}
         {tab === 'nexus' && <div className="p-6"><NexusSettingsPage /></div>}
         {tab === 'usage' && <UsagePage />}
         {tab === 'appearance' && <AppearancePage />}

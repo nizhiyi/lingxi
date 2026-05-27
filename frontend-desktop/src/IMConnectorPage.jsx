@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
-  Link2, Plus, Pencil, Trash2, Power, PowerOff, Loader2, Info, Radio,
+  Link2, Plus, Pencil, Trash2, Power, PowerOff, Loader2, Info, Radio, Send, TestTube,
 } from 'lucide-react';
 import { Button, Card, Badge, Modal, Input, Select } from './ui/primitives';
 import { cn } from './ui/cn';
@@ -15,7 +15,10 @@ const PLATFORMS = [
     { key: 'app_id',     label: 'App ID',     placeholder: '飞书应用的 App ID', type: 'text' },
     { key: 'app_secret', label: 'App Secret', placeholder: '飞书应用的 App Secret', type: 'password' },
   ]},
-  { id: 'wecom', label: '企业微信', icon: '💼', fields: [
+  { id: 'wecom_webhook', label: '企业微信', icon: '💼', desc: '群机器人 Webhook 通知', fields: [
+    { key: 'webhook_url', label: 'Webhook URL', placeholder: '群机器人 Webhook 地址', type: 'text' },
+  ]},
+  { id: 'wecom', label: '企业微信（应用）', icon: '💼', desc: '自建应用双向对话', fields: [
     { key: 'corp_id',          label: 'Corp ID',          placeholder: '企业 ID（corpid）', type: 'text' },
     { key: 'agent_id',         label: 'Agent ID',         placeholder: '应用 AgentId', type: 'text' },
     { key: 'secret',           label: 'Secret',           placeholder: '应用 Secret', type: 'password' },
@@ -25,10 +28,10 @@ const PLATFORMS = [
 ];
 
 const SESSION_MODES = [
-  { value: 'per_group',      label: '按群共享',   desc: '同一个群内所有人共享一个对话上下文（推荐）' },
-  { value: 'per_user',       label: '按人独立',   desc: '同一个用户跨群共享，不同用户独立' },
-  { value: 'per_group_user', label: '按群+人',    desc: '同一个群内每个人独立上下文' },
-  { value: 'stateless',      label: '无状态',     desc: '每条消息独立，不保留任何上下文' },
+  { value: 'per_group',      label: '按群共享',   desc: '群内共享上下文（推荐）' },
+  { value: 'per_user',       label: '按人独立',   desc: '用户跨群独立' },
+  { value: 'per_group_user', label: '按群+人',    desc: '群内每人独立' },
+  { value: 'stateless',      label: '无状态',     desc: '不保留上下文' },
 ];
 
 function ConnectorForm({ initial, onSave, onCancel, agents }) {
@@ -58,7 +61,9 @@ function ConnectorForm({ initial, onSave, onCancel, agents }) {
     }
     setSaving(true);
     try {
-      const config = { ...fields, session_mode: sessionMode, session_ttl_hours: Number(ttlHours) };
+      const config = isWebhookOnly
+        ? { ...fields }
+        : { ...fields, session_mode: sessionMode, session_ttl_hours: Number(ttlHours) };
       const r = await fetch('/api/im-connectors', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -70,102 +75,90 @@ function ConnectorForm({ initial, onSave, onCancel, agents }) {
     finally { setSaving(false); }
   };
 
+  const isWebhookOnly = platform === 'wecom_webhook';
+
   const tips = {
-    wecom: { icon: Info, text: '企业微信需要公网 IP 或内网穿透，回调地址填写：', code: 'http://你的IP:3001/api/wecom/callback' },
+    wecom: { icon: Info, text: '企业微信自建应用需要公网 IP 或内网穿透，回调地址填写：', code: 'http://你的IP:3001/api/wecom/callback' },
+    wecom_webhook: { icon: Info, text: '在企业微信群设置中添加「群机器人」，复制 Webhook 地址粘贴到上方。仅支持发送通知，不支持接收回复。' },
     dingtalk: { icon: Info, text: '钉钉 Stream 模式无需公网 IP，在开发者后台将消息接收模式设为 Stream 即可。' },
     feishu: { icon: Info, text: '飞书长连接模式无需公网 IP，在开发者后台开启机器人能力并订阅「接收消息」事件即可。' },
   };
   const tip = tips[platform];
 
   return (
-    <Modal open onClose={onCancel} title={isEdit ? '编辑连接器' : '添加 IM 连接器'} width={520}>
-      <div className="space-y-5">
+    <Modal open onClose={onCancel} title={isEdit ? '编辑连接器' : '添加 IM 连接器'} width={440} footer={
+      <div className="flex gap-2">
+        <Button variant="outline" onClick={onCancel}>取消</Button>
+        <Button onClick={handleSave} disabled={saving}>
+          {saving ? <><Loader2 size={14} className="animate-spin" />保存中...</> : '保存'}
+        </Button>
+      </div>
+    }>
+      <div className="space-y-3">
         {!isEdit && (
-          <div>
-            <div className="text-xs font-medium text-[color:var(--text-faint)] uppercase tracking-wide mb-2">平台</div>
-            <div className="flex gap-2 flex-wrap">
-              {PLATFORMS.map(p => (
-                <button key={p.id} onClick={() => { setPlatform(p.id); setFields({}); }} className={cn(
-                  'px-3 py-2 rounded-lg border text-sm transition',
-                  platform === p.id
-                    ? 'border-[color:var(--accent)] bg-[color:var(--accent-soft)] text-[color:var(--accent)] font-medium'
-                    : 'border-[color:var(--line)] text-[color:var(--text-soft)] hover:bg-[color:var(--bg-soft)]'
-                )}>
-                  {p.icon} {p.label}
-                </button>
-              ))}
-            </div>
+          <div className="flex gap-1.5 flex-wrap">
+            {PLATFORMS.map(p => (
+              <button key={p.id} onClick={() => { setPlatform(p.id); setFields({}); }} className={cn(
+                'px-2.5 py-1 rounded-lg border text-xs transition',
+                platform === p.id
+                  ? 'border-[color:var(--accent)] bg-[color:var(--accent-soft)] text-[color:var(--accent)] font-medium'
+                  : 'border-[color:var(--line)] text-[color:var(--text-soft)] hover:bg-[color:var(--bg-soft)]'
+              )}>
+                {p.icon} {p.label}
+              </button>
+            ))}
           </div>
         )}
 
-        <div>
-          <label className="text-xs font-medium text-[color:var(--text-soft)] mb-1 block">连接名称</label>
-          <Input value={name} onChange={e => setName(e.target.value)} placeholder="例如：钉钉-产品群" />
-        </div>
-
-        <div>
-          <label className="text-xs font-medium text-[color:var(--text-soft)] mb-1 block">指定作答智能体（可选）</label>
-          <Select value={agentId} onChange={e => setAgentId(Number(e.target.value))}>
-            <option value={0}>默认助理</option>
-            {(agents || []).map(a => <option key={a.id} value={a.id}>{a.avatar} {a.name}</option>)}
-          </Select>
-        </div>
-
-        <div>
-          <div className="text-xs font-medium text-[color:var(--text-faint)] uppercase tracking-wide mb-3 pb-1.5 border-b border-[color:var(--line)]">平台凭证</div>
-          <div className="space-y-3">
-            {platformDef.fields.map(f => (
-              <div key={f.key}>
-                <label className="text-xs font-medium text-[color:var(--text-soft)] mb-1 block">{f.label}</label>
-                <Input type={f.type} placeholder={f.placeholder} value={fields[f.key] || ''} onChange={e => setFields(prev => ({ ...prev, [f.key]: e.target.value }))} autoComplete="off" />
-              </div>
-            ))}
+        <div className="grid grid-cols-2 gap-2">
+          <div>
+            <label className="text-[11px] font-medium text-[color:var(--text-soft)] mb-0.5 block">连接名称</label>
+            <Input value={name} onChange={e => setName(e.target.value)} placeholder={platformDef.desc ? `例如：${platformDef.desc}` : `例如：${platformDef.label}-产品群`} />
+          </div>
+          <div>
+            <label className="text-[11px] font-medium text-[color:var(--text-soft)] mb-0.5 block">指定智能体（可选）</label>
+            <Select value={agentId} onChange={e => setAgentId(Number(e.target.value))}>
+              <option value={0}>默认助理</option>
+              {(agents || []).map(a => <option key={a.id} value={a.id}>{a.avatar} {a.name}</option>)}
+            </Select>
           </div>
         </div>
 
-        <div>
-          <div className="text-xs font-medium text-[color:var(--text-faint)] uppercase tracking-wide mb-3 pb-1.5 border-b border-[color:var(--line)]">会话管理</div>
-          <div className="text-xs font-medium text-[color:var(--text-soft)] mb-2">会话粒度</div>
-          <div className="space-y-2">
-            {SESSION_MODES.map(m => (
-              <label key={m.value} className={cn(
-                'flex items-start gap-2.5 p-3 rounded-lg border cursor-pointer transition',
-                sessionMode === m.value ? 'border-[color:var(--accent)] bg-[color:var(--accent-soft)]' : 'border-[color:var(--line)] hover:bg-[color:var(--bg-soft)]'
-              )}>
-                <input type="radio" name="session_mode" value={m.value} checked={sessionMode === m.value} onChange={() => setSessionMode(m.value)} className="mt-0.5 accent-[color:var(--accent)]" />
-                <div>
-                  <div className="text-sm font-medium">{m.label}</div>
-                  <div className="text-xs text-[color:var(--text-faint)]">{m.desc}</div>
-                </div>
-              </label>
-            ))}
-          </div>
-          {sessionMode !== 'stateless' && (
-            <div className="mt-3">
-              <label className="text-xs font-medium text-[color:var(--text-soft)] mb-1 block">
-                上下文有效期（小时）
-                <span className="font-normal text-[color:var(--text-faint)] ml-1">超过此时间不活跃后自动开启新对话，0 表示永不重置</span>
-              </label>
-              <Input type="number" min="0" max="720" className="w-32" value={ttlHours} onChange={e => setTtlHours(e.target.value)} />
+        <div className="space-y-1.5">
+          {platformDef.fields.map(f => (
+            <div key={f.key}>
+              <label className="text-[11px] font-medium text-[color:var(--text-soft)] mb-0.5 block">{f.label}</label>
+              <Input type={f.type} placeholder={f.placeholder} value={fields[f.key] || ''} onChange={e => setFields(prev => ({ ...prev, [f.key]: e.target.value }))} autoComplete="off" />
             </div>
-          )}
+          ))}
         </div>
+
+        {!isWebhookOnly && (
+          <div>
+            <label className="text-[11px] font-medium text-[color:var(--text-faint)] mb-1 block">会话粒度</label>
+            <Select value={sessionMode} onChange={e => setSessionMode(e.target.value)}>
+              {SESSION_MODES.map(m => (
+                <option key={m.value} value={m.value}>{m.label} — {m.desc}</option>
+              ))}
+            </Select>
+            {sessionMode !== 'stateless' && (
+              <div className="mt-1.5 flex items-center gap-2">
+                <label className="text-[11px] text-[color:var(--text-soft)] shrink-0">上下文有效期（小时）</label>
+                <Input type="number" min="0" max="720" className="w-16 text-xs" value={ttlHours} onChange={e => setTtlHours(e.target.value)} />
+                <span className="text-[10px] text-[color:var(--text-faint)]">0 表示永不重置</span>
+              </div>
+            )}
+          </div>
+        )}
 
         {tip && (
-          <div className="flex items-start gap-2 px-3 py-2.5 rounded-lg bg-blue-500/10 border border-blue-500/20 text-xs text-[color:var(--text-soft)] leading-relaxed">
-            <Info size={14} className="shrink-0 mt-0.5 text-blue-400" />
-            <span>{tip.text}{tip.code && <code className="bg-blue-500/10 px-1.5 py-0.5 rounded font-mono text-[11px] ml-1">{tip.code}</code>}</span>
+          <div className="flex items-start gap-1.5 px-2 py-1.5 rounded-lg bg-blue-500/10 border border-blue-500/20 text-[11px] text-[color:var(--text-soft)] leading-relaxed">
+            <Info size={11} className="shrink-0 mt-0.5 text-blue-400" />
+            <span>{tip.text}{tip.code && <code className="bg-blue-500/10 px-1 py-0.5 rounded font-mono text-[10px] ml-1">{tip.code}</code>}</span>
           </div>
         )}
 
-        {error && <div className="px-3 py-2.5 rounded-lg bg-red-500/10 border border-red-500/30 text-red-500 text-sm">{error}</div>}
-
-        <div className="flex justify-end gap-2 pt-3 border-t border-[color:var(--line)]">
-          <Button variant="outline" onClick={onCancel}>取消</Button>
-          <Button onClick={handleSave} disabled={saving}>
-            {saving ? <><Loader2 size={14} className="animate-spin" />保存中...</> : '保存'}
-          </Button>
-        </div>
+        {error && <div className="px-2 py-1.5 rounded-lg bg-red-500/10 border border-red-500/30 text-red-500 text-xs">{error}</div>}
       </div>
     </Modal>
   );
@@ -263,9 +256,9 @@ export default function IMConnectorPage() {
         <div className="space-y-3">
           <AnimatePresence>
             {connectors.map(c => (
-              <motion.div key={c.platform} layout initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, scale: 0.95 }}>
+              <motion.div key={c.id || c.platform} layout initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, scale: 0.95 }}>
                 <ConnectorCard
-                  connector={{ ...c, _toggling: togglingId === c.platform }}
+                  connector={{ ...c, _toggling: togglingId === c.id }}
                   onToggle={handleToggle}
                   onEdit={conn => { setEditingConnector(conn); setShowForm(true); }}
                   onDelete={handleDelete}
@@ -281,36 +274,135 @@ export default function IMConnectorPage() {
 
 function ConnectorCard({ connector, onToggle, onEdit, onDelete }) {
   const platform = PLATFORMS.find(p => p.id === connector.platform);
+  const isWebhook = connector.platform === 'wecom_webhook';
+  const [testing, setTesting] = useState(false);
+  const [testResult, setTestResult] = useState(null);
+  const [showSend, setShowSend] = useState(false);
+
+  const handleTest = async () => {
+    setTesting(true);
+    setTestResult(null);
+    try {
+      const r = await fetch(`/api/im-connectors/${connector.id}/test`, { method: 'POST' });
+      const d = await r.json();
+      setTestResult(r.ok ? 'success' : (d.error || '测试失败'));
+    } catch (e) { setTestResult(e.message); }
+    finally { setTesting(false); }
+  };
+
   return (
-    <Card className={cn('transition-all hover:-translate-y-0.5 hover:shadow-glow group', connector.enabled && 'border-[color:var(--accent)]/40')}>
-      <div className="flex items-center gap-3">
-        <span className="text-2xl">{platform?.icon || '🔌'}</span>
-        <div className="flex-1 min-w-0">
-          <div className="font-medium">{platform?.label || connector.platform}</div>
-          <div className="flex items-center gap-1.5 mt-0.5">
-            {connector.running ? (
-              <Badge tone="success"><Radio size={10} className="animate-pulse" /> 运行中</Badge>
-            ) : connector.enabled ? (
-              <Badge tone="accent">已启用</Badge>
-            ) : (
-              <Badge tone="default">已停用</Badge>
+    <>
+      <Card className={cn('transition-all hover:-translate-y-0.5 hover:shadow-glow group', connector.enabled && 'border-[color:var(--accent)]/40')}>
+        <div className="flex items-center gap-3">
+          <span className="text-2xl">{platform?.icon || '🔌'}</span>
+          <div className="flex-1 min-w-0">
+            <div className="font-medium">{connector.name || platform?.label || connector.platform}</div>
+            <div className="flex items-center gap-1.5 mt-0.5">
+              {isWebhook && <Badge tone="default">Webhook</Badge>}
+              {!isWebhook && connector.running ? (
+                <Badge tone="success"><Radio size={10} className="animate-pulse" /> 运行中</Badge>
+              ) : !isWebhook && connector.enabled ? (
+                <Badge tone="accent">已启用</Badge>
+              ) : !isWebhook ? (
+                <Badge tone="default">已停用</Badge>
+              ) : null}
+            </div>
+          </div>
+          <div className="flex items-center gap-1.5 shrink-0 opacity-0 group-hover:opacity-100 transition">
+            {isWebhook && (
+              <>
+                <Button size="sm" variant="ghost" onClick={handleTest} disabled={testing} title="发送测试消息">
+                  {testing ? <Loader2 size={14} className="animate-spin" /> : <TestTube size={14} />}
+                </Button>
+                <Button size="sm" variant="ghost" onClick={() => setShowSend(true)} title="发送通知">
+                  <Send size={14} />
+                </Button>
+              </>
             )}
+            <Button size="sm" variant="ghost" onClick={() => onEdit(connector)}><Pencil size={14} /></Button>
+            {!isWebhook && (
+              <Button size="sm" variant={connector.enabled ? 'outline' : 'default'} onClick={() => onToggle(connector)} disabled={connector._toggling}>
+                {connector._toggling ? <Loader2 size={12} className="animate-spin" /> : connector.enabled ? <><PowerOff size={12} /> 停用</> : <><Power size={12} /> 启用</>}
+              </Button>
+            )}
+            <Button size="sm" variant="ghost" onClick={() => onDelete(connector)}><Trash2 size={14} /></Button>
           </div>
         </div>
-        <div className="flex items-center gap-1.5 shrink-0 opacity-0 group-hover:opacity-100 transition">
-          <Button size="sm" variant="ghost" onClick={() => onEdit(connector)}><Pencil size={14} /></Button>
-          <Button size="sm" variant={connector.enabled ? 'outline' : 'default'} onClick={() => onToggle(connector)} disabled={connector._toggling}>
-            {connector._toggling ? <Loader2 size={12} className="animate-spin" /> : connector.enabled ? <><PowerOff size={12} /> 停用</> : <><Power size={12} /> 启用</>}
+        {testResult && (
+          <div className={cn('mt-2 text-xs px-2.5 py-1.5 rounded-lg', testResult === 'success' ? 'bg-green-500/10 text-green-500' : 'bg-red-500/10 text-red-500')}>
+            {testResult === 'success' ? '测试消息发送成功' : testResult}
+          </div>
+        )}
+        {connector.enabled && !isWebhook && (
+          <div className="flex gap-4 mt-3 pt-3 border-t border-[color:var(--line)] text-xs text-[color:var(--text-faint)]">
+            <span>会话模式：{SESSION_MODES.find(m => m.value === (connector.parsedConfig?.session_mode || 'per_group'))?.label || '按群共享'}</span>
+            <span>TTL：{connector.parsedConfig?.session_ttl_hours || 24}h</span>
+          </div>
+        )}
+      </Card>
+      {showSend && <SendWebhookModal connectorId={connector.id} onClose={() => setShowSend(false)} />}
+    </>
+  );
+}
+
+function SendWebhookModal({ connectorId, onClose }) {
+  const [content, setContent] = useState('');
+  const [msgType, setMsgType] = useState('text');
+  const [sending, setSending] = useState(false);
+  const [result, setResult] = useState(null);
+
+  const handleSend = async () => {
+    if (!content.trim()) return;
+    setSending(true);
+    setResult(null);
+    try {
+      const r = await fetch(`/api/im-connectors/${connectorId}/send`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ msg_type: msgType, content: content.trim() }),
+      });
+      const d = await r.json();
+      if (r.ok) {
+        setResult('success');
+        setContent('');
+      } else {
+        setResult(d.error || '发送失败');
+      }
+    } catch (e) { setResult(e.message); }
+    finally { setSending(false); }
+  };
+
+  return (
+    <Modal open onClose={onClose} title="发送企微通知" width={420}>
+      <div className="space-y-3">
+        <div className="flex gap-2">
+          <button onClick={() => setMsgType('text')} className={cn(
+            'px-2.5 py-1 rounded-lg border text-xs transition',
+            msgType === 'text' ? 'border-[color:var(--accent)] bg-[color:var(--accent-soft)] text-[color:var(--accent)]' : 'border-[color:var(--line)] text-[color:var(--text-soft)]'
+          )}>文本</button>
+          <button onClick={() => setMsgType('markdown')} className={cn(
+            'px-2.5 py-1 rounded-lg border text-xs transition',
+            msgType === 'markdown' ? 'border-[color:var(--accent)] bg-[color:var(--accent-soft)] text-[color:var(--accent)]' : 'border-[color:var(--line)] text-[color:var(--text-soft)]'
+          )}>Markdown</button>
+        </div>
+        <textarea
+          className="w-full h-28 rounded-lg border border-[color:var(--line)] bg-[color:var(--bg-soft)] p-3 text-sm text-[color:var(--text)] placeholder:text-[color:var(--text-faint)] focus:outline-none focus:ring-1 focus:ring-[color:var(--accent)] resize-none"
+          placeholder={msgType === 'markdown' ? '支持 Markdown 格式，如 **加粗** [链接](url)' : '输入要发送的消息内容'}
+          value={content}
+          onChange={e => setContent(e.target.value)}
+        />
+        {result && (
+          <div className={cn('text-xs px-2.5 py-1.5 rounded-lg', result === 'success' ? 'bg-green-500/10 text-green-500' : 'bg-red-500/10 text-red-500')}>
+            {result === 'success' ? '发送成功' : result}
+          </div>
+        )}
+        <div className="flex justify-end gap-2 pt-1">
+          <Button variant="outline" onClick={onClose}>关闭</Button>
+          <Button onClick={handleSend} disabled={sending || !content.trim()}>
+            {sending ? <><Loader2 size={14} className="animate-spin" />发送中...</> : <><Send size={14} /> 发送</>}
           </Button>
-          <Button size="sm" variant="ghost" onClick={() => onDelete(connector)}><Trash2 size={14} /></Button>
         </div>
       </div>
-      {connector.enabled && (
-        <div className="flex gap-4 mt-3 pt-3 border-t border-[color:var(--line)] text-xs text-[color:var(--text-faint)]">
-          <span>会话模式：{SESSION_MODES.find(m => m.value === (connector.parsedConfig?.session_mode || 'per_group'))?.label || '按群共享'}</span>
-          <span>TTL：{connector.parsedConfig?.session_ttl_hours || 24}h</span>
-        </div>
-      )}
-    </Card>
+    </Modal>
   );
 }

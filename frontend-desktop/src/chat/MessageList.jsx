@@ -106,16 +106,16 @@ function MessageItem({ item }) {
   if (item.type === 'connecting') {
     return (
       <div className="flex justify-start gap-2.5 my-3 enter-up">
-        <div className="w-8 h-8 rounded-full bg-gradient-to-br from-[color:var(--accent)] to-[#5e8bff] flex items-center justify-center shrink-0 shadow-sm self-start mt-0.5">
+        <div className="w-8 h-8 rounded-full bg-gradient-to-br from-[color:var(--accent)] to-[#5e8bff] flex items-center justify-center shrink-0 shadow-sm self-start mt-0.5 animate-pulse">
           <Sparkles size={14} className="text-white" />
         </div>
         <div className="assistant-bubble thinking-shimmer flex items-center gap-3 text-[color:var(--text-soft)]">
-          <div className="flex items-end gap-[3px] h-5">
-            <span className="neural-bar" style={{ animationDelay: '0s' }} />
-            <span className="neural-bar" style={{ animationDelay: '0.15s' }} />
-            <span className="neural-bar" style={{ animationDelay: '0.3s' }} />
+          <div className="flex items-center gap-[5px] h-5">
+            <span className="w-1.5 h-1.5 rounded-full bg-[color:var(--accent)] animate-bounce" style={{ animationDelay: '0s', animationDuration: '1.2s' }} />
+            <span className="w-1.5 h-1.5 rounded-full bg-[color:var(--accent)] animate-bounce" style={{ animationDelay: '0.2s', animationDuration: '1.2s' }} />
+            <span className="w-1.5 h-1.5 rounded-full bg-[color:var(--accent)] animate-bounce" style={{ animationDelay: '0.4s', animationDuration: '1.2s' }} />
           </div>
-          <span className="text-sm">灵犀正在思考…</span>
+          <span className="text-sm text-[color:var(--text-faint)]">思考中…</span>
         </div>
       </div>
     );
@@ -144,32 +144,44 @@ const cardItem = {
 };
 
 function Empty({ profileName }) {
-  const examples = [
-    { text: '帮我把这周的会议纪要整理成行动项', icon: '📋' },
-    { text: '解释一下 transformer 的注意力机制', icon: '🧠' },
-    { text: '写一个 Python 脚本批量重命名图片', icon: '💻' },
-    { text: '把这段中文翻译成地道的英文', icon: '🌍' },
+  const EXAMPLE_GROUPS = [
+    { title: '创作写作', icon: Sparkles, color: 'from-violet-500 to-purple-600', items: [
+      '帮我把这周的会议纪要整理成行动项',
+      '写一封给客户的项目进展更新邮件',
+    ]},
+    { title: '代码开发', icon: Sparkles, color: 'from-cyan-500 to-blue-600', items: [
+      '写一个 Python 脚本批量重命名图片',
+      '解释一下 React useEffect 的依赖数组',
+    ]},
+    { title: '分析研究', icon: Sparkles, color: 'from-amber-500 to-orange-600', items: [
+      '对比分析 PostgreSQL 和 MySQL 的优劣',
+      '解释一下 transformer 的注意力机制',
+    ]},
+    { title: '翻译润色', icon: Sparkles, color: 'from-emerald-500 to-teal-600', items: [
+      '把这段中文翻译成地道的英文',
+      '润色一下这段产品介绍文案',
+    ]},
   ];
+
   const sendMessage = useStore((s) => s.sendMessage);
   const title = '你好，我是灵犀';
+
   return (
     <div className="h-full flex flex-col items-center justify-center px-6 py-10 text-center">
-      {/* AI 核心光环 */}
       <motion.div
         className="relative mb-8"
         initial={{ opacity: 0, scale: 0.8 }}
         animate={{ opacity: 1, scale: 1 }}
         transition={{ duration: 0.6, ease: [.22,1,.36,1] }}
       >
-        <div className="ai-core-ring w-22 h-22 rounded-3xl bg-gradient-to-br from-[color:var(--accent)] to-[#5e8bff] text-white flex items-center justify-center shadow-glow" style={{ width: 88, height: 88 }}>
-          <Sparkles size={36} />
+        <div className="ai-core-ring rounded-3xl bg-gradient-to-br from-[color:var(--accent)] to-[#5e8bff] text-white flex items-center justify-center shadow-glow" style={{ width: 80, height: 80 }}>
+          <Sparkles size={32} />
         </div>
-        <div className="absolute -bottom-1 -right-1 w-7 h-7 rounded-full bg-emerald-500 border-2 border-[color:var(--bg)] flex items-center justify-center">
-          <div className="w-2 h-2 rounded-full bg-white" style={{ animation: 'breathe 1.6s ease-in-out infinite' }} />
+        <div className="absolute -bottom-1 -right-1 w-6 h-6 rounded-full bg-emerald-500 border-2 border-[color:var(--bg)] flex items-center justify-center">
+          <div className="w-1.5 h-1.5 rounded-full bg-white" style={{ animation: 'breathe 1.6s ease-in-out infinite' }} />
         </div>
       </motion.div>
 
-      {/* 逐字浮入标题 */}
       <motion.h2
         className="text-3xl font-bold tracking-tight"
         variants={heroContainer}
@@ -194,30 +206,56 @@ function Empty({ profileName }) {
         {profileName ? `当前接入：${profileName}` : '你的智能 AI 桌面助理，随时为你查信息、写内容、整理思路'}
       </motion.p>
 
-      {/* 示例卡片 stagger 入场 */}
       <motion.div
-        className="mt-10 grid grid-cols-1 sm:grid-cols-2 gap-3 w-full max-w-2xl"
+        className="mt-8 grid grid-cols-1 sm:grid-cols-2 gap-3 w-full max-w-2xl"
         variants={cardStagger}
         initial="initial"
         animate="animate"
       >
-        {examples.map((q) => (
-          <motion.button
-            key={q.text}
+        {EXAMPLE_GROUPS.map((group) => (
+          <motion.div
+            key={group.title}
             variants={cardItem}
-            whileHover={{ y: -2, boxShadow: '0 0 0 1px var(--accent-soft), 0 8px 30px -4px var(--accent-glow)' }}
-            className="group/card surface surface-hover text-left px-4 py-3.5"
-            onClick={() => sendMessage({ message: q.text })}
+            className="surface text-left overflow-hidden"
           >
-            <div className="flex items-start gap-3">
-              <span className="text-lg shrink-0">{q.icon}</span>
-              <div className="flex-1 min-w-0">
-                <div className="text-sm text-[color:var(--text)]">{q.text}</div>
-              </div>
-              <ArrowRight size={14} className="shrink-0 mt-0.5 text-[color:var(--text-faint)] opacity-0 group-hover/card:opacity-100 group-hover/card:translate-x-0.5 transition-all" />
+            <div className={cn('px-3 py-2 flex items-center gap-2 bg-gradient-to-r opacity-90', group.color)}>
+              <group.icon size={12} className="text-white" />
+              <span className="text-[11px] font-semibold text-white tracking-wide">{group.title}</span>
             </div>
-          </motion.button>
+            <div className="p-1">
+              {group.items.map((text) => (
+                <button
+                  key={text}
+                  onClick={() => sendMessage({ message: text })}
+                  className="group/item w-full flex items-center gap-2 px-3 py-2.5 rounded-lg text-left hover:bg-[color:var(--bg-soft)] transition-all"
+                >
+                  <span className="text-[13px] text-[color:var(--text)] flex-1 min-w-0 truncate">{text}</span>
+                  <ArrowRight size={12} className="shrink-0 text-[color:var(--text-faint)] opacity-0 group-hover/item:opacity-100 group-hover/item:translate-x-0.5 transition-all" />
+                </button>
+              ))}
+            </div>
+          </motion.div>
         ))}
+      </motion.div>
+
+      <motion.div
+        className="mt-6 flex items-center gap-4 text-[11px] text-[color:var(--text-faint)]"
+        initial={{ opacity: 0 }}
+        animate={{ opacity: 1 }}
+        transition={{ delay: 1.2, duration: 0.5 }}
+      >
+        <span className="flex items-center gap-1">
+          <kbd className="px-1.5 py-0.5 rounded bg-[color:var(--bg-soft)] border border-[color:var(--line)] text-[10px] font-mono">/</kbd>
+          快捷命令
+        </span>
+        <span className="flex items-center gap-1">
+          <kbd className="px-1.5 py-0.5 rounded bg-[color:var(--bg-soft)] border border-[color:var(--line)] text-[10px] font-mono">⌘K</kbd>
+          搜索消息
+        </span>
+        <span className="flex items-center gap-1">
+          <kbd className="px-1.5 py-0.5 rounded bg-[color:var(--bg-soft)] border border-[color:var(--line)] text-[10px] font-mono">⌘N</kbd>
+          新对话
+        </span>
       </motion.div>
     </div>
   );

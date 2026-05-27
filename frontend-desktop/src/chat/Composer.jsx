@@ -419,20 +419,20 @@ export function Composer({ useKB: controlledUseKB, setUseKB: setControlledUseKB 
             onCompositionStart={onCompositionStart}
             onCompositionEnd={onCompositionEnd}
             onPaste={onPaste}
-            placeholder="输入消息，/ 唤起快捷命令，拖入文件，Shift+Enter 换行"
+            placeholder="输入消息… / 快捷命令 · 拖入文件 · Shift+Enter 换行"
             rows={1}
             className="text-[15px] leading-6"
           />
           <div className="flex items-center justify-between mt-2">
-            <div className="flex items-center gap-1">
+            <div className="flex items-center gap-0.5">
               <Tooltip label="添加图片">
                 <label className="cursor-pointer">
                   <input
                     type="file" accept="image/*" multiple className="hidden"
                     onChange={(e) => onPickFiles(Array.from(e.target.files || []))}
                   />
-                  <span className="inline-flex items-center justify-center w-9 h-9 rounded-lg hover:bg-[color:var(--bg-soft)] text-[color:var(--text-soft)]">
-                    <ImagePlus size={18} />
+                  <span className="inline-flex items-center justify-center w-8 h-8 rounded-lg hover:bg-[color:var(--bg-soft)] text-[color:var(--text-faint)] hover:text-[color:var(--text-soft)] transition">
+                    <ImagePlus size={16} />
                   </span>
                 </label>
               </Tooltip>
@@ -455,11 +455,12 @@ export function Composer({ useKB: controlledUseKB, setUseKB: setControlledUseKB 
                       e.target.value = '';
                     }}
                   />
-                  <span className="inline-flex items-center justify-center w-9 h-9 rounded-lg hover:bg-[color:var(--bg-soft)] text-[color:var(--text-soft)]">
-                    <Paperclip size={18} />
+                  <span className="inline-flex items-center justify-center w-8 h-8 rounded-lg hover:bg-[color:var(--bg-soft)] text-[color:var(--text-faint)] hover:text-[color:var(--text-soft)] transition">
+                    <Paperclip size={16} />
                   </span>
                 </label>
               </Tooltip>
+              <span className="w-px h-4 bg-[color:var(--line)] mx-0.5" />
               <Tooltip label={recording ? '点击停止' : transcribing ? '识别中...' : '语音输入'}>
                 <button
                   onClick={(e) => {
@@ -469,60 +470,73 @@ export function Composer({ useKB: controlledUseKB, setUseKB: setControlledUseKB 
                   }}
                   disabled={transcribing}
                   className={cn(
-                    'inline-flex items-center justify-center w-9 h-9 rounded-lg transition',
+                    'inline-flex items-center justify-center w-8 h-8 rounded-lg transition',
                     recording ? 'bg-red-500/20 text-red-500 voice-pulse-bg' :
                     transcribing ? 'bg-[color:var(--accent-soft)] text-[color:var(--accent)]' :
-                    'hover:bg-[color:var(--bg-soft)] text-[color:var(--text-soft)]'
+                    'hover:bg-[color:var(--bg-soft)] text-[color:var(--text-faint)] hover:text-[color:var(--text-soft)]'
                   )}
                 >
-                  {transcribing ? <Loader2 size={18} className="animate-spin" /> :
-                   recording ? <MicOff size={18} /> : <Mic size={18} />}
+                  {transcribing ? <Loader2 size={16} className="animate-spin" /> :
+                   recording ? <MicOff size={16} /> : <Mic size={16} />}
                 </button>
               </Tooltip>
               {window.electronAPI?.captureScreen && (
                 <Tooltip label="截屏 (⌘⇧S)">
                   <button
                     onClick={handleScreenshot}
-                    className="inline-flex items-center justify-center w-9 h-9 rounded-lg hover:bg-[color:var(--bg-soft)] text-[color:var(--text-soft)] transition"
+                    className="inline-flex items-center justify-center w-8 h-8 rounded-lg hover:bg-[color:var(--bg-soft)] text-[color:var(--text-faint)] hover:text-[color:var(--text-soft)] transition"
                   >
-                    <Camera size={18} />
+                    <Camera size={16} />
                   </button>
                 </Tooltip>
               )}
-              <Tooltip label={screenAgentMode ? '关闭 Screen Agent' : 'Screen Agent · 屏幕操控'}>
+              <Tooltip label={screenAgentMode ? '关闭 Screen Agent' : 'Screen Agent'}>
                 <button
                   onClick={toggleScreenAgentMode}
                   className={cn(
-                    'inline-flex items-center justify-center w-9 h-9 rounded-lg transition',
+                    'inline-flex items-center justify-center w-8 h-8 rounded-lg transition',
                     screenAgentMode
                       ? 'bg-blue-500/20 text-blue-500'
-                      : 'hover:bg-[color:var(--bg-soft)] text-[color:var(--text-soft)]'
+                      : 'hover:bg-[color:var(--bg-soft)] text-[color:var(--text-faint)] hover:text-[color:var(--text-soft)]'
                   )}
                 >
-                  <Monitor size={18} />
+                  <Monitor size={16} />
                 </button>
               </Tooltip>
-              <Tooltip label={useKB ? '已启用知识库检索' : '启用知识库检索'}>
+              <Tooltip label={useKB ? '已启用知识库' : '启用知识库检索'}>
                 <button
                   onClick={() => setUseKB((v) => !v)}
                   aria-pressed={useKB}
                   aria-label={useKB ? '关闭知识库检索' : '启用知识库检索'}
-                  className={`inline-flex items-center justify-center w-9 h-9 rounded-lg transition ${
-                    useKB ? 'bg-[color:var(--accent-soft)] text-[color:var(--accent)]' : 'hover:bg-[color:var(--bg-soft)] text-[color:var(--text-soft)]'
-                  }`}
+                  className={cn(
+                    'inline-flex items-center justify-center w-8 h-8 rounded-lg transition',
+                    useKB ? 'bg-[color:var(--accent-soft)] text-[color:var(--accent)]' : 'hover:bg-[color:var(--bg-soft)] text-[color:var(--text-faint)] hover:text-[color:var(--text-soft)]'
+                  )}
                 >
-                  <BookOpen size={18} />
+                  <BookOpen size={16} />
                 </button>
               </Tooltip>
             </div>
             {isStreaming ? (
-              <Button variant="outline" onClick={abort}>
-                <Square size={14} /> 停止
-              </Button>
+              <button
+                onClick={abort}
+                className="inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-lg text-sm font-medium border border-red-500/30 text-red-500 bg-red-500/5 hover:bg-red-500/10 transition-all"
+              >
+                <Square size={12} /> 停止
+              </button>
             ) : (
-              <Button onClick={onSubmit} disabled={!hasContent}>
-                <Send size={14} /> 发送
-              </Button>
+              <button
+                onClick={onSubmit}
+                disabled={!hasContent}
+                className={cn(
+                  'inline-flex items-center justify-center w-9 h-9 rounded-xl transition-all duration-200',
+                  hasContent
+                    ? 'bg-[color:var(--accent)] text-white shadow-[0_2px_12px_var(--accent-glow)] hover:shadow-[0_4px_20px_var(--accent-glow)] hover:-translate-y-px active:translate-y-0 active:scale-95'
+                    : 'bg-[color:var(--bg-soft)] text-[color:var(--text-faint)] cursor-not-allowed'
+                )}
+              >
+                <Send size={16} />
+              </button>
             )}
           </div>
         </div>

@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import { AnimatePresence } from 'framer-motion';
-import { Bot, BookOpen, Brain, Cpu, Plug, Search, Download, Zap, Dna, Undo2, X } from 'lucide-react';
+import { BookOpen, Brain, Cpu, Plug, Search, Download, Zap, Dna, Undo2, X, Shield } from 'lucide-react';
 import { parseAssistantContent } from './blockUtils';
 import { useStore } from '../state/useStore';
 import { MessageList } from './MessageList';
@@ -10,6 +10,7 @@ import { ScreenAgentPanel } from './ScreenAgentPanel';
 import { Badge } from '../ui/primitives';
 import { api } from '../api/client';
 import { cn } from '../ui/cn';
+import AgentAvatar from '../ui/AgentAvatar';
 
 export function ChatView() {
   const [useKB, setUseKB] = useState(false);
@@ -84,50 +85,42 @@ function ChatContextBar({ useKB, onSearchOpen }) {
   const title = session?.title || (activeSessionId ? '当前会话' : '新对话');
 
   return (
-    <div className="px-6 pt-4">
-      <div className="max-w-3xl mx-auto surface px-4 py-3">
-        <div className="flex items-start gap-3">
-          <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-[color:var(--accent-soft)] to-transparent text-[color:var(--accent)] flex items-center justify-center text-lg shrink-0 ring-1 ring-[color:var(--accent-soft)]">
-            {agent?.avatar || <Bot size={18} />}
-          </div>
-          <div className="flex-1 min-w-0">
-            <div className="flex flex-wrap items-center gap-2">
-              <div className="font-semibold truncate">{agent?.name || '默认智能体'}</div>
-              <Badge tone="info">本会话锁定</Badge>
-              <span className="text-xs text-[color:var(--text-faint)] truncate">{title}</span>
-            </div>
-            <div className="mt-2 flex flex-wrap items-center gap-1.5">
-              <ContextPill icon={<Cpu size={12} />} label={activeProfile?.model || activeProfile?.name || '未配置模型'} />
-              <ContextPill icon={<Brain size={12} />} label={`技能 ${capability.skills}`} />
-              <ContextPill icon={<Plug size={12} />} label={`MCP ${capability.mcp}`} />
-              <ContextPill
-                icon={<BookOpen size={12} />}
-                label={`知识库 ${useKB ? '本轮启用' : capability.knowledge}`}
-                active={useKB}
-              />
-              <div className="ml-auto flex items-center gap-1.5">
-                <button
-                  onClick={onSearchOpen}
-                  className="inline-flex items-center gap-1 px-2 py-1 rounded-lg text-[11px] bg-[color:var(--bg-soft)] text-[color:var(--text-faint)] hover:text-[color:var(--text-soft)] hover:bg-[color:var(--line)] transition"
-                  title="搜索消息 ⌘K"
-                >
-                  <Search size={10} /> 搜索 <kbd className="ml-0.5 text-[9px] px-1 py-0 rounded bg-[color:var(--bg-elev)] border border-[color:var(--line)]">⌘K</kbd>
-                </button>
-                {messages.length > 0 && (
-                  <button
-                    onClick={() => exportToMarkdown(messages, title)}
-                    className="inline-flex items-center gap-1 px-2 py-1 rounded-lg text-[11px] bg-[color:var(--bg-soft)] text-[color:var(--text-faint)] hover:text-[color:var(--text-soft)] hover:bg-[color:var(--line)] transition"
-                    title="导出为 Markdown"
-                  >
-                    <Download size={10} /> 导出
-                  </button>
-                )}
-                <span className="text-[11px] text-[color:var(--text-faint)]">
-                  {messages.length ? `${messages.length} 条消息` : '准备开始'}
-                </span>
-              </div>
-            </div>
-          </div>
+    <div className="px-6 pt-3">
+      <div className="max-w-3xl mx-auto flex items-center gap-3 px-4 py-2.5 rounded-xl bg-[color:var(--bg-soft)]/60 border border-[color:var(--line)]/50">
+        <AgentAvatar avatar={agent?.avatar} name={agent?.name} size={32} className="shrink-0" />
+        <div className="flex-1 min-w-0 flex items-center gap-2 overflow-hidden">
+          <span className="text-sm font-semibold truncate text-[color:var(--text)]">{agent?.name || '默认智能体'}</span>
+          <span className="text-[color:var(--line)]">|</span>
+          <span className="text-xs text-[color:var(--text-faint)] truncate">{title}</span>
+        </div>
+        <div className="flex items-center gap-1 shrink-0">
+          <ContextPill icon={<Cpu size={10} />} label={activeProfile?.model || '未配置'} />
+          <ContextPill icon={<Brain size={10} />} label={capability.skills} />
+          {useKB && <ContextPill icon={<BookOpen size={10} />} label="KB" active />}
+          {session?.permission_mode === 'managed' && (
+            <ContextPill icon={<Shield size={10} />} label="管控" active />
+          )}
+        </div>
+        <div className="flex items-center gap-1 shrink-0 ml-1">
+          <button
+            onClick={onSearchOpen}
+            className="inline-flex items-center justify-center w-7 h-7 rounded-lg text-[color:var(--text-faint)] hover:text-[color:var(--text-soft)] hover:bg-[color:var(--bg-soft)] transition"
+            title="搜索消息 ⌘K"
+          >
+            <Search size={13} />
+          </button>
+          {messages.length > 0 && (
+            <button
+              onClick={() => exportToMarkdown(messages, title)}
+              className="inline-flex items-center justify-center w-7 h-7 rounded-lg text-[color:var(--text-faint)] hover:text-[color:var(--text-soft)] hover:bg-[color:var(--bg-soft)] transition"
+              title="导出为 Markdown"
+            >
+              <Download size={13} />
+            </button>
+          )}
+          {messages.length > 0 && (
+            <span className="text-[10px] text-[color:var(--text-faint)] tabular-nums">{messages.length}</span>
+          )}
         </div>
       </div>
     </div>
@@ -136,13 +129,14 @@ function ChatContextBar({ useKB, onSearchOpen }) {
 
 function ContextPill({ icon, label, active = false }) {
   return (
-    <span className={`inline-flex items-center gap-1.5 px-2 py-1 rounded-lg text-[11px] ${
+    <span className={cn(
+      'inline-flex items-center gap-1 px-1.5 py-0.5 rounded-md text-[10px]',
       active
         ? 'bg-[color:var(--accent-soft)] text-[color:var(--accent)]'
-        : 'bg-[color:var(--bg-soft)] text-[color:var(--text-soft)]'
-    }`}>
+        : 'bg-[color:var(--bg-elev)] text-[color:var(--text-faint)]'
+    )}>
       {icon}
-      <span className="max-w-[160px] truncate">{label}</span>
+      <span className="max-w-[120px] truncate">{label}</span>
     </span>
   );
 }

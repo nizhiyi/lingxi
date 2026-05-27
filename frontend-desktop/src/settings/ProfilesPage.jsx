@@ -14,7 +14,12 @@ import { cn } from '../ui/cn';
 const PROVIDER_THEME = {
   anthropic_official:  { icon: Sparkles,     gradient: 'from-amber-500 to-orange-600',       label: 'Claude',      color: '#d97706' },
   dashscope_anthropic: { icon: Cloud,        gradient: 'from-orange-400 to-amber-600',       label: 'DashScope',   color: '#f59e0b' },
-  deepseek_anthropic:  { icon: Telescope,    gradient: 'from-blue-500 to-indigo-600',        label: 'DeepSeek',    color: '#6366f1' },
+  deepseek_anthropic:  { icon: Telescope,    gradient: 'from-blue-500 to-indigo-600',        label: 'DeepSeek',    color: '#6366f1', direct: true },
+  glm_anthropic:       { icon: Brain,        gradient: 'from-cyan-500 to-blue-600',          label: 'GLM / 智谱',  color: '#06b6d4', direct: true },
+  kimi_anthropic:      { icon: Star,         gradient: 'from-violet-500 to-purple-600',      label: 'Kimi',        color: '#8b5cf6', direct: true },
+  minimax_anthropic:   { icon: MessageSquare, gradient: 'from-pink-500 to-rose-600',         label: 'MiniMax',     color: '#ec4899', direct: true },
+  ollama_anthropic:    { icon: Server,       gradient: 'from-slate-500 to-slate-700',        label: 'Ollama',      color: '#64748b', direct: true },
+  lmstudio_anthropic:  { icon: Box,          gradient: 'from-indigo-500 to-violet-600',      label: 'LM Studio',   color: '#6366f1', direct: true },
   deepseek_openai:     { icon: Telescope,    gradient: 'from-blue-500 to-indigo-600',        label: 'DeepSeek',    color: '#6366f1' },
   qwen_openai:         { icon: Cloud,        gradient: 'from-orange-500 to-red-500',         label: 'Qwen',        color: '#f97316' },
   doubao_openai:       { icon: Flame,        gradient: 'from-rose-500 to-pink-600',          label: 'Doubao',      color: '#f43f5e' },
@@ -24,7 +29,6 @@ const PROVIDER_THEME = {
   openrouter_openai:   { icon: Layers,       gradient: 'from-emerald-500 to-teal-600',       label: 'OpenRouter',  color: '#10b981' },
   groq_openai:         { icon: Zap,          gradient: 'from-amber-400 to-orange-500',       label: 'Groq',        color: '#f59e0b' },
   siliconflow_openai:  { icon: CircuitBoard, gradient: 'from-sky-500 to-blue-600',           label: 'SiliconFlow', color: '#0ea5e9' },
-  ollama_openai:       { icon: Server,       gradient: 'from-slate-500 to-slate-700',        label: 'Ollama',      color: '#64748b' },
   openai_official:     { icon: Bot,          gradient: 'from-emerald-500 to-green-600',      label: 'OpenAI',      color: '#10b981' },
   custom_anthropic:    { icon: Settings2,    gradient: 'from-gray-500 to-gray-600',          label: '自定义',      color: '#6b7280' },
   custom_openai:       { icon: Settings2,    gradient: 'from-gray-500 to-gray-600',          label: '自定义',      color: '#6b7280' },
@@ -44,14 +48,34 @@ const PROVIDER_MODELS = {
     { group: '推理', models: ['o1', 'o1-mini', 'o3', 'o4-mini'] },
   ],
   deepseek_anthropic: [
-    { group: '通用', models: ['deepseek-chat', 'deepseek-reasoner'] },
+    { group: '推荐', models: ['deepseek-v4-pro', 'deepseek-v4-flash'] },
+    { group: '经典', models: ['deepseek-chat', 'deepseek-reasoner'] },
   ],
   deepseek_openai: [
-    { group: '通用', models: ['deepseek-chat', 'deepseek-reasoner'] },
+    { group: '推荐', models: ['deepseek-v4-pro', 'deepseek-v4-flash'] },
+    { group: '经典', models: ['deepseek-chat', 'deepseek-reasoner'] },
+  ],
+  glm_anthropic: [
+    { group: '旗舰', models: ['glm-5.1', 'glm-5-turbo'] },
+    { group: '快速', models: ['glm-4.5-air'] },
+  ],
+  kimi_anthropic: [
+    { group: '推荐', models: ['kimi-k2.6', 'kimi-k2.5'] },
+    { group: '经典', models: ['kimi-k2-0905-preview', 'kimi-k2-turbo-preview'] },
+  ],
+  minimax_anthropic: [
+    { group: '推荐', models: ['MiniMax-M2.7', 'MiniMax-M2.7-highspeed'] },
+    { group: '上一代', models: ['MiniMax-M2.5', 'MiniMax-M2.5-highspeed'] },
+  ],
+  ollama_anthropic: [
+    { group: '推荐', models: ['qwen3.6:27b', 'qwen3.6:8b', 'llama3.3:70b'] },
+  ],
+  lmstudio_anthropic: [
+    { group: '推荐', models: ['qwen/qwen3.6-27b', 'qwen/qwen3.6-8b'] },
   ],
   qwen_openai: [
-    { group: '旗舰', models: ['qwen-max', 'qwen-max-latest'] },
-    { group: '长上下文', models: ['qwen-long', 'qwen-plus'] },
+    { group: '旗舰', models: ['qwen-max', 'qwen-max-latest', 'qwen3-coder-plus'] },
+    { group: '长上下文', models: ['qwen-long', 'qwen-plus', 'qwen3.6-plus'] },
     { group: '快速', models: ['qwen-turbo', 'qwen-turbo-latest'] },
   ],
   dashscope_anthropic: [
@@ -123,19 +147,26 @@ export function ProfilesPage() {
   };
 
   const handleTest = async (p) => {
-    setTestStates((s) => ({ ...s, [p.id]: 'testing' }));
+    setTestStates((s) => ({ ...s, [p.id]: { phase: 'connectivity', status: 'testing' } }));
     try {
       let token = '';
       if (p.auth_token_cipher) {
         token = await electron.decryptSecret(p.auth_token_cipher);
       }
       const r = await api.testProfile(p.id, { token });
-      setTestStates((s) => ({ ...s, [p.id]: r.ok ? 'success' : 'fail' }));
-      if (!r.ok) pushNotification({ title: '连接失败', body: r.error || '请检查配置' });
+      if (r.ok) {
+        const latency = r.connectivity?.latency || r.latency || '';
+        const proxyLatency = r.proxy?.latency || '';
+        setTestStates((s) => ({ ...s, [p.id]: { phase: 'done', status: 'success', latency, proxyLatency, hasProxy: !!r.proxy } }));
+      } else {
+        const failPhase = r.connectivity && !r.connectivity.success ? 'connectivity' : 'proxy';
+        setTestStates((s) => ({ ...s, [p.id]: { phase: failPhase, status: 'fail' } }));
+        pushNotification({ title: '连接失败', body: r.error || '请检查配置' });
+      }
     } catch {
-      setTestStates((s) => ({ ...s, [p.id]: 'fail' }));
+      setTestStates((s) => ({ ...s, [p.id]: { phase: 'connectivity', status: 'fail' } }));
     }
-    setTimeout(() => setTestStates((s) => { const n = { ...s }; delete n[p.id]; return n; }), 4000);
+    setTimeout(() => setTestStates((s) => { const n = { ...s }; delete n[p.id]; return n; }), 5000);
   };
 
   const providerMap = useMemo(() => {
@@ -204,16 +235,25 @@ export function ProfilesPage() {
 // ─── 接入点卡片 ──────────────────────────────────────────────────
 function ProfileCard({ profile: p, provider, testState, onActivate, onTest, onEdit, onDelete }) {
   const theme = getProviderTheme(provider?.code);
-  const testIcon = testState === 'testing' ? Loader2
-    : testState === 'success' ? CheckCircle2
-    : testState === 'fail' ? AlertCircle : null;
+  const isDirect = theme.direct;
+  const ts = testState || {};
+  const isTesting = ts.status === 'testing';
+  const isSuccess = ts.status === 'success';
+  const isFail = ts.status === 'fail';
+
+  const testLabel = isTesting
+    ? (ts.phase === 'proxy' ? '管道验证…' : '连通测试…')
+    : isSuccess
+      ? (ts.hasProxy ? `直连 ${ts.latency} · 管道 ${ts.proxyLatency}` : `连接成功 ${ts.latency}`)
+      : isFail
+        ? (ts.phase === 'proxy' ? '代理管道失败' : '连接失败')
+        : '测试连接';
 
   return (
     <Card className={cn(
       'group relative flex flex-col gap-3 transition-all duration-200 hover:-translate-y-0.5 hover:shadow-md overflow-hidden',
       p.is_active && 'ring-1 ring-[color:var(--accent)]/40'
     )}>
-      {/* 顶部渐变色条 */}
       <div className={cn('absolute top-0 left-0 right-0 h-0.5 bg-gradient-to-r', theme.gradient)} />
 
       <div className="flex items-start justify-between gap-3 pt-1">
@@ -230,22 +270,24 @@ function ProfileCard({ profile: p, provider, testState, onActivate, onTest, onEd
               )}
             </div>
             <div className="text-xs text-[color:var(--text-faint)] truncate mt-0.5 flex items-center gap-1.5">
-              <Badge tone={p.provider_protocol === 'openai' ? 'info' : 'default'} className="!text-[10px] !px-1.5 !py-0">
-                {p.provider_protocol === 'openai' ? 'OpenAI' : 'Anthropic'}
-              </Badge>
+              {isDirect ? (
+                <Badge tone="default" className="!text-[10px] !px-1.5 !py-0 !bg-emerald-500/10 !text-emerald-600">直连</Badge>
+              ) : (
+                <Badge tone={p.provider_protocol === 'openai' ? 'info' : 'default'} className="!text-[10px] !px-1.5 !py-0">
+                  {p.provider_protocol === 'openai' ? '代理' : 'Anthropic'}
+                </Badge>
+              )}
               <span className="truncate">{p.model || provider?.default_model || '默认模型'}</span>
             </div>
           </div>
         </div>
       </div>
 
-      {/* 密钥信息 */}
       <div className="flex items-center gap-1.5 text-xs text-[color:var(--text-faint)]">
         <ShieldCheck size={11} />
         <span>{p.auth_token_mask || '未设置密钥'}</span>
       </div>
 
-      {/* 操作栏 */}
       <div className="flex items-center gap-1.5 pt-0.5 border-t border-[color:var(--line)]/50">
         {!p.is_active && (
           <Button size="sm" variant="soft" onClick={onActivate} className="text-xs">
@@ -253,18 +295,10 @@ function ProfileCard({ profile: p, provider, testState, onActivate, onTest, onEd
           </Button>
         )}
         <Button size="sm" variant="ghost" onClick={onTest} className="text-xs gap-1">
-          {testIcon ? (
-            <span className={cn(
-              testState === 'testing' && 'animate-spin',
-              testState === 'success' && 'text-emerald-500',
-              testState === 'fail' && 'text-red-500',
-            )}>
-              {testState === 'testing' && <Loader2 size={12} />}
-              {testState === 'success' && <CheckCircle2 size={12} />}
-              {testState === 'fail' && <AlertCircle size={12} />}
-            </span>
-          ) : null}
-          {testState === 'testing' ? '测试中…' : testState === 'success' ? '连接成功' : testState === 'fail' ? '连接失败' : '测试连接'}
+          {isTesting && <span className="animate-spin"><Loader2 size={12} /></span>}
+          {isSuccess && <span className="text-emerald-500"><CheckCircle2 size={12} /></span>}
+          {isFail && <span className="text-red-500"><AlertCircle size={12} /></span>}
+          {testLabel}
         </Button>
         <div className="flex-1" />
         <Button size="sm" variant="ghost" onClick={onEdit} className="opacity-0 group-hover:opacity-100 transition-opacity">
@@ -373,9 +407,12 @@ function ProfileEditor({ providers, profile, onClose, onSaved }) {
   const [showAdvanced, setShowAdvanced] = useState(false);
   const [showToken, setShowToken] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [fetchingModels, setFetchingModels] = useState(false);
+  const [remoteModels, setRemoteModels] = useState(null);
   const pushNotification = useStore((s) => s.pushNotification);
 
   const isOpenAI = selectedProvider?.protocol === 'openai';
+  const isCustom = selectedProvider?.code === 'custom_openai' || selectedProvider?.code === 'custom_anthropic';
 
   const handlePickProvider = (p) => {
     setSelectedProvider(p);
@@ -388,7 +425,32 @@ function ProfileEditor({ providers, profile, onClose, onSaved }) {
         if (meta.transformer) setTransformer(meta.transformer);
       } catch {}
     }
+    setRemoteModels(null);
     setStep(2);
+  };
+
+  const handleFetchModels = async () => {
+    if (!token.trim()) return pushNotification({ title: '请先填写密钥', body: '' });
+    const url = baseUrl || selectedProvider?.default_base_url || '';
+    if (!url) return pushNotification({ title: '缺少 Base URL', body: '' });
+    setFetchingModels(true);
+    try {
+      const r = await api.fetchModels({
+        base_url: url,
+        token,
+        protocol: selectedProvider?.protocol || 'openai',
+      });
+      if (r.ok && r.models?.length > 0) {
+        setRemoteModels(r.models);
+        pushNotification({ title: `发现 ${r.models.length} 个模型`, body: '请从列表中选择' });
+      } else {
+        pushNotification({ title: '获取模型列表失败', body: r.error || '供应商可能不支持 /models 端点，请手动选择' });
+      }
+    } catch (e) {
+      pushNotification({ title: '获取模型失败', body: e.message });
+    } finally {
+      setFetchingModels(false);
+    }
   };
 
   const handleSave = async () => {
@@ -407,7 +469,7 @@ function ProfileEditor({ providers, profile, onClose, onSaved }) {
         id: profile?.id || 0,
         name,
         provider_id: selectedProvider.id,
-        base_url: baseUrl,
+        base_url: baseUrl || selectedProvider?.default_base_url || '',
         model,
         auth_token_cipher: cipher,
         auth_token_mask: mask,
@@ -428,7 +490,6 @@ function ProfileEditor({ providers, profile, onClose, onSaved }) {
 
   const theme = selectedProvider ? getProviderTheme(selectedProvider.code) : null;
 
-  // 第一步：选择供应商
   if (step === 1) {
     return (
       <Modal open onClose={onClose} title="选择供应商" width={680}>
@@ -441,7 +502,6 @@ function ProfileEditor({ providers, profile, onClose, onSaved }) {
     );
   }
 
-  // 第二步：填写配置
   const SelIcon = theme?.icon || Cpu;
   return (
     <Modal
@@ -491,7 +551,7 @@ function ProfileEditor({ providers, profile, onClose, onSaved }) {
           )}
         </div>
 
-        {/* 密钥 - 最突出的输入 */}
+        {/* 密钥 */}
         <Field label={isEdit ? '密钥（留空则保留旧值）' : 'API Key'}>
           <div className="relative">
             <Input
@@ -526,6 +586,39 @@ function ProfileEditor({ providers, profile, onClose, onSaved }) {
           </div>
         </Field>
 
+        {/* 模型选择 — 始终可见 */}
+        <Field label="模型">
+          <div className="flex gap-2">
+            <div className="flex-1">
+              <ModelComboBox
+                value={model}
+                onChange={setModel}
+                providerCode={selectedProvider?.code}
+                remoteModels={remoteModels}
+                placeholder={selectedProvider?.default_model || ''}
+              />
+            </div>
+            {!isEdit && (
+              <Button
+                size="sm"
+                variant="soft"
+                onClick={handleFetchModels}
+                disabled={fetchingModels || !token.trim()}
+                className="shrink-0 h-[38px]"
+                title="用密钥获取该供应商可用的模型列表"
+              >
+                {fetchingModels ? <Loader2 size={14} className="animate-spin" /> : <Search size={14} />}
+                {fetchingModels ? '获取中' : '获取模型'}
+              </Button>
+            )}
+          </div>
+          {!model && selectedProvider?.default_model && (
+            <div className="mt-1 text-[11px] text-[color:var(--text-faint)]">
+              留空将使用默认模型: {selectedProvider.default_model}
+            </div>
+          )}
+        </Field>
+
         {/* 高级设置折叠区 */}
         <div>
           <button
@@ -535,23 +628,20 @@ function ProfileEditor({ providers, profile, onClose, onSaved }) {
           >
             {showAdvanced ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
             高级设置
-            <span className="text-[color:var(--text-faint)]">（名称、模型、URL）</span>
+            <span className="text-[color:var(--text-faint)]">（名称、URL{isOpenAI ? '、Transformer' : ''}）</span>
           </button>
           {showAdvanced && (
             <div className="mt-3 space-y-3 pl-0.5">
               <Field label="名称">
                 <Input value={name} onChange={(e) => setName(e.target.value)} placeholder={selectedProvider?.name || ''} />
               </Field>
-              <Field label="模型">
-                <ModelComboBox
-                  value={model}
-                  onChange={setModel}
-                  providerCode={selectedProvider?.code}
-                  placeholder={selectedProvider?.default_model || ''}
+              <Field label={isCustom ? 'Base URL' : 'Base URL（供应商已预设，一般无需修改）'}>
+                <Input
+                  value={baseUrl}
+                  onChange={(e) => setBaseUrl(e.target.value)}
+                  placeholder={selectedProvider?.default_base_url || 'https://...'}
+                  className={!isCustom ? 'opacity-70' : ''}
                 />
-              </Field>
-              <Field label="Base URL">
-                <Input value={baseUrl} onChange={(e) => setBaseUrl(e.target.value)} placeholder={selectedProvider?.default_base_url || 'https://...'} />
               </Field>
               {isOpenAI && (
                 <Field label="Transformer">
@@ -567,15 +657,22 @@ function ProfileEditor({ providers, profile, onClose, onSaved }) {
 }
 
 // ─── 模型选择 ComboBox ──────────────────────────────────────────
-function ModelComboBox({ value, onChange, providerCode, placeholder }) {
+function ModelComboBox({ value, onChange, providerCode, remoteModels, placeholder }) {
   const [open, setOpen] = useState(false);
   const [filter, setFilter] = useState('');
-  const groups = PROVIDER_MODELS[providerCode] || [];
+  const presetGroups = PROVIDER_MODELS[providerCode] || [];
 
-  const filtered = groups.map(g => ({
+  const hasRemote = remoteModels && remoteModels.length > 0;
+  const allGroups = hasRemote
+    ? [{ group: '可用模型（来自 API）', models: remoteModels }, ...presetGroups.map(g => ({ ...g, group: `预设 · ${g.group}` }))]
+    : presetGroups;
+
+  const filtered = allGroups.map(g => ({
     ...g,
     models: g.models.filter(m => m.toLowerCase().includes(filter.toLowerCase())),
   })).filter(g => g.models.length > 0);
+
+  const hasDropdown = allGroups.length > 0;
 
   return (
     <div className="relative">
@@ -586,14 +683,17 @@ function ModelComboBox({ value, onChange, providerCode, placeholder }) {
         onBlur={() => setTimeout(() => setOpen(false), 200)}
         placeholder={placeholder}
       />
-      {open && groups.length > 0 && (
-        <div className="absolute z-50 top-full left-0 right-0 mt-1 max-h-[240px] overflow-y-auto rounded-lg border border-[color:var(--line)] bg-[color:var(--bg-elev)] shadow-lg scrollable">
+      {open && hasDropdown && (
+        <div className="absolute z-50 top-full left-0 right-0 mt-1 max-h-[280px] overflow-y-auto rounded-lg border border-[color:var(--line)] bg-[color:var(--bg-elev)] shadow-lg scrollable">
           {filtered.length === 0 && (
             <div className="px-3 py-2 text-xs text-[color:var(--text-faint)]">无匹配模型（可手动输入）</div>
           )}
           {filtered.map(g => (
             <div key={g.group}>
-              <div className="px-3 py-1 text-[10px] font-semibold text-[color:var(--text-faint)] uppercase tracking-wider bg-[color:var(--bg-soft)]">{g.group}</div>
+              <div className={cn(
+                'px-3 py-1 text-[10px] font-semibold uppercase tracking-wider bg-[color:var(--bg-soft)]',
+                g.group.includes('API') ? 'text-emerald-600' : 'text-[color:var(--text-faint)]'
+              )}>{g.group}</div>
               {g.models.map(m => (
                 <button key={m} type="button"
                   onMouseDown={(e) => { e.preventDefault(); onChange(m); setOpen(false); }}

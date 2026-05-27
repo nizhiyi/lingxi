@@ -330,6 +330,8 @@ func migrate() {
 	addColumnIfMissing("agents", "post_actions", "TEXT NOT NULL DEFAULT '[]'")
 	// 列级迁移：sessions.is_a2a（标记 A2A 专用会话，从主会话列表中隐藏）
 	addColumnIfMissing("sessions", "is_a2a", "INTEGER NOT NULL DEFAULT 0")
+	// 列级迁移：sessions.permission_mode（会话权限模式：trust=完全放行, managed=权限管控）
+	addColumnIfMissing("sessions", "permission_mode", "TEXT NOT NULL DEFAULT 'trust'")
 	// 列级迁移：im_connectors 多实例支持
 	addColumnIfMissing("im_connectors", "name", "TEXT NOT NULL DEFAULT ''")
 	addColumnIfMissing("im_connectors", "agent_id", "INTEGER NOT NULL DEFAULT 0")
@@ -466,6 +468,12 @@ func migrate() {
 
 	// ── 群聊 Agent 人格 ──────────────────────────────────────────
 	MigrateAgentPersonality()
+
+	// ── 权限审批 ────────────────────────────────────────────────
+	MigratePermission()
+
+	// ── H5 远程访问 ─────────────────────────────────────────────
+	MigrateH5Access()
 
 	seedBuiltinProviders()
 	seedBuiltinAgent()
@@ -607,46 +615,64 @@ func seedBuiltinProviders() {
 			doc:  "https://help.aliyun.com/zh/model-studio/",
 		},
 		{
-			code: "deepseek_anthropic", name: "DeepSeek (Anthropic Compatible)", protocol: "anthropic",
-			baseURL: "https://api.deepseek.com/anthropic", model: "deepseek-chat",
-			meta: `{"usage":{"endpoint":"https://api.deepseek.com/user/balance","auth_header":"Authorization","auth_prefix":"Bearer "}}`,
+			code: "deepseek_anthropic", name: "DeepSeek (Anthropic 直连)", protocol: "anthropic",
+			baseURL: "https://api.deepseek.com/anthropic", model: "deepseek-v4-pro",
+			meta: `{"auth_strategy":"auth_token","context_windows":{"deepseek-v4-pro":1000000,"deepseek-v4-flash":1000000,"deepseek-chat":1000000,"deepseek-reasoner":1000000},"default_env":{"ANTHROPIC_DEFAULT_HAIKU_MODEL_SUPPORTED_CAPABILITIES":"thinking,effort,adaptive_thinking,max_effort","ANTHROPIC_DEFAULT_SONNET_MODEL_SUPPORTED_CAPABILITIES":"thinking,effort,adaptive_thinking,max_effort","ANTHROPIC_DEFAULT_OPUS_MODEL_SUPPORTED_CAPABILITIES":"thinking,effort,adaptive_thinking,max_effort"},"usage":{"endpoint":"https://api.deepseek.com/user/balance","auth_header":"Authorization","auth_prefix":"Bearer "}}`,
 			doc:  "https://platform.deepseek.com/",
+		},
+		{
+			code: "glm_anthropic", name: "GLM / 智谱 (Anthropic 直连)", protocol: "anthropic",
+			baseURL: "https://open.bigmodel.cn/api/anthropic", model: "glm-5.1",
+			meta: `{"auth_strategy":"auth_token","context_windows":{"glm-5.1":200000,"glm-5-turbo":200000,"glm-4.5-air":128000},"default_env":{"CC_HAHA_SEND_DISABLED_THINKING":"1"}}`,
+			doc:  "https://open.bigmodel.cn/dev/api",
+		},
+		{
+			code: "kimi_anthropic", name: "Kimi / Moonshot (Anthropic 直连)", protocol: "anthropic",
+			baseURL: "https://api.kimi.com/coding", model: "kimi-k2.6",
+			meta: `{"auth_strategy":"auth_token","context_windows":{"kimi-k2.6":262144,"kimi-k2.5":262144,"kimi-k2-0905-preview":262144,"kimi-k2-turbo-preview":262144},"default_env":{"CC_HAHA_SEND_DISABLED_THINKING":"1"}}`,
+			doc:  "https://platform.moonshot.cn/docs",
+		},
+		{
+			code: "minimax_anthropic", name: "MiniMax (Anthropic 直连)", protocol: "anthropic",
+			baseURL: "https://api.minimaxi.com/anthropic", model: "MiniMax-M2.7",
+			meta: `{"auth_strategy":"auth_token","context_windows":{"MiniMax-M2.7":204800,"MiniMax-M2.7-highspeed":204800,"MiniMax-M2.5":204800}}`,
+			doc:  "https://platform.minimaxi.com",
 		},
 		// ── OpenAI 协议（经 bridge 路由层翻译）─────────────────────────
 		{
 			code: "deepseek_openai", name: "DeepSeek (OpenAI Compatible)", protocol: "openai",
-			baseURL: "https://api.deepseek.com/v1/chat/completions", model: "deepseek-chat",
-			meta: `{"transformer":"deepseek","usage":{"endpoint":"https://api.deepseek.com/user/balance","auth_header":"Authorization","auth_prefix":"Bearer "}}`,
+			baseURL: "https://api.deepseek.com/v1/chat/completions", model: "deepseek-v4-pro",
+			meta: `{"transformer":"deepseek","context_windows":{"deepseek-v4-pro":1000000,"deepseek-chat":1000000},"usage":{"endpoint":"https://api.deepseek.com/user/balance","auth_header":"Authorization","auth_prefix":"Bearer "}}`,
 			doc:  "https://platform.deepseek.com/",
 		},
 		{
 			code: "qwen_openai", name: "Qwen / DashScope (OpenAI Compatible)", protocol: "openai",
 			baseURL: "https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions", model: "qwen3-coder-plus",
-			meta: `{"transformer":"","usage":{"endpoint":"https://dashscope.aliyuncs.com/api/v1/account/balance","auth_header":"Authorization","auth_prefix":"Bearer "}}`,
+			meta: `{"transformer":"","context_windows":{"qwen3-coder-plus":131072,"qwen-max":32768,"qwen-plus":131072,"qwen-turbo":131072},"usage":{"endpoint":"https://dashscope.aliyuncs.com/api/v1/account/balance","auth_header":"Authorization","auth_prefix":"Bearer "}}`,
 			doc:  "https://help.aliyun.com/zh/model-studio/developer-reference/use-qwen-by-calling-api",
 		},
 		{
 			code: "doubao_openai", name: "Doubao / Volcengine (OpenAI Compatible)", protocol: "openai",
 			baseURL: "https://ark.cn-beijing.volces.com/api/v3/chat/completions", model: "",
-			meta: `{"transformer":""}`,
+			meta: `{"transformer":"","context_windows":{"doubao-1.5-pro-32k":32768,"doubao-1.5-pro-256k":262144}}`,
 			doc:  "https://www.volcengine.com/docs/82379",
 		},
 		{
 			code: "glm_openai", name: "GLM / Z.ai (OpenAI Compatible)", protocol: "openai",
 			baseURL: "https://open.bigmodel.cn/api/paas/v4/chat/completions", model: "glm-4.6",
-			meta: `{"transformer":""}`,
+			meta: `{"transformer":"","context_windows":{"glm-4.6":128000,"glm-4-plus":128000,"glm-4-flash":128000}}`,
 			doc:  "https://open.bigmodel.cn/dev/api",
 		},
 		{
 			code: "moonshot_openai", name: "Moonshot / Kimi (OpenAI Compatible)", protocol: "openai",
 			baseURL: "https://api.moonshot.cn/v1/chat/completions", model: "kimi-k2-turbo-preview",
-			meta: `{"transformer":""}`,
+			meta: `{"transformer":"","context_windows":{"kimi-k2-turbo-preview":262144,"moonshot-v1-128k":131072}}`,
 			doc:  "https://platform.moonshot.cn/docs",
 		},
 		{
 			code: "gemini_openai", name: "Google Gemini (OpenAI Compatible)", protocol: "openai",
 			baseURL: "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions", model: "gemini-2.5-pro",
-			meta: `{"transformer":"gemini"}`,
+			meta: `{"transformer":"gemini","context_windows":{"gemini-2.5-pro":1000000,"gemini-2.5-flash":1000000}}`,
 			doc:  "https://ai.google.dev/gemini-api/docs/openai",
 		},
 		{
@@ -668,15 +694,21 @@ func seedBuiltinProviders() {
 			doc:  "https://docs.siliconflow.cn/",
 		},
 		{
-			code: "ollama_openai", name: "Ollama (本地, OpenAI Compatible)", protocol: "openai",
-			baseURL: "http://127.0.0.1:11434/v1/chat/completions", model: "qwen2.5-coder:14b",
-			meta: `{"transformer":""}`,
-			doc:  "https://github.com/ollama/ollama",
+			code: "ollama_anthropic", name: "Ollama (本地, Anthropic 直连)", protocol: "anthropic",
+			baseURL: "http://127.0.0.1:11434", model: "qwen3.6:27b",
+			meta: `{"auth_strategy":"auth_token_empty_api_key","default_env":{"ANTHROPIC_AUTH_TOKEN":"ollama"}}`,
+			doc:  "https://docs.ollama.com/integrations/claude-code",
+		},
+		{
+			code: "lmstudio_anthropic", name: "LM Studio (本地, Anthropic 直连)", protocol: "anthropic",
+			baseURL: "http://localhost:1234", model: "qwen/qwen3.6-27b",
+			meta: `{"auth_strategy":"auth_token_empty_api_key","default_env":{"ANTHROPIC_AUTH_TOKEN":"lmstudio"}}`,
+			doc:  "https://lmstudio.ai/docs/integrations/claude-code",
 		},
 		{
 			code: "openai_official", name: "OpenAI Official", protocol: "openai",
 			baseURL: "https://api.openai.com/v1/chat/completions", model: "gpt-4o",
-			meta: `{"transformer":""}`,
+			meta: `{"transformer":"","context_windows":{"gpt-4o":128000,"gpt-4o-mini":128000,"o3":200000,"o4-mini":200000}}`,
 			doc:  "https://platform.openai.com/docs",
 		},
 		// ── 通用 ────────────────────────────────────────────────────

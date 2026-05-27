@@ -57,6 +57,7 @@ export const api = {
   deleteProfile: (id) => req('DELETE', `/api/api-profiles/${id}`),
   activateProfile: (id) => req('POST', `/api/api-profiles/${id}/activate`),
   testProfile: (id, body) => req('POST', `/api/api-profiles/${id}/test`, body || {}),
+  fetchModels: (body) => req('POST', '/api/api-profiles/fetch-models', body),
 
   // skills / knowledge
   listSkills: () => req('GET', '/api/skills'),
@@ -184,6 +185,8 @@ export const api = {
   terminateGroupChat: (id) => req('POST', `/api/group-chats/${id}/terminate`),
   acceptGroupInvite: (id, localAgentIds) => req('POST', `/api/group-chats/${id}/accept`, { local_agent_ids: localAgentIds }),
   rejectGroupInvite: (id) => req('POST', `/api/group-chats/${id}/reject`),
+  inviteGroupMembers: (id, data) => req('POST', `/api/group-chats/${id}/members/add`, data),
+  kickGroupMember: (id, payload) => req('POST', `/api/group-chats/${id}/members/remove`, payload),
   deleteGroupChat: (id) => req('DELETE', `/api/group-chats/${id}`),
   uploadGroupImage: async (file) => {
     const form = new FormData();
@@ -236,6 +239,22 @@ export const api = {
   listScreenActions: (sessionId, limit = 50) => req('GET', `/api/screen-agent/actions?session_id=${sessionId}&limit=${limit}`),
   getAgentScreenConfig: (id) => req('GET', `/api/agents/${id}/screen-config`),
   setAgentScreenConfig: (id, data) => req('PUT', `/api/agents/${id}/screen-config`, data),
+
+  // ── 权限审批 ──────────────────────────────────────────────────
+  listPermissionRules: (agentId = 0) => req('GET', `/api/permission-rules?agent_id=${agentId}`),
+  createPermissionRule: (data) => req('POST', '/api/permission-rules', data),
+  deletePermissionRule: (id) => req('DELETE', `/api/permission-rules/${id}`),
+  listPendingApprovals: () => req('GET', '/api/approvals/pending'),
+  listRecentApprovals: (limit = 50) => req('GET', `/api/approvals?limit=${limit}`),
+  reviewApproval: (id, action, reason = '') => req('POST', `/api/approvals/${id}/review`, { action, reason }),
+
+  // ── H5 远程访问 ───────────────────────────────────────────────
+  getH5Settings: () => req('GET', '/api/h5-access/settings'),
+  updateH5Settings: (data) => req('PUT', '/api/h5-access/settings', data),
+  listH5Tokens: () => req('GET', '/api/h5-access/tokens'),
+  generateH5Token: (data) => req('POST', '/api/h5-access/tokens', data),
+  revokeH5Token: (id) => req('POST', `/api/h5-access/tokens/${id}/revoke`),
+  deleteH5Token: (id) => req('DELETE', `/api/h5-access/tokens/${id}`),
 };
 
 // ─── WebSocket ────────────────────────────────────────────────────
