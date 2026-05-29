@@ -129,6 +129,7 @@ func transcribeLocal(whisperBin, modelPath string, audioData []byte, filename st
 		"-m", modelPath,
 		"-f", inputPath,
 		"-l", "zh",
+		"--prompt", "以下是普通话的句子。",
 		"--no-timestamps",
 		"-nt",
 	)
@@ -150,8 +151,30 @@ func transcribeLocal(whisperBin, modelPath string, audioData []byte, filename st
 		return "", fmt.Errorf("whisper 未识别到有效文本")
 	}
 
+	text = traditionalToSimplified(text)
+
 	slog.Info("local whisper result", "text", truncateStr(text, 100))
 	return text, nil
+}
+
+// traditionalToSimplified 将常见繁体字转为简体（高频字覆盖日常对话）
+func traditionalToSimplified(s string) string {
+	// 繁->简 对照（去重，每个繁体字只出现一次）
+	const trad = "國會這為來與從個對開時過動機關點長問學實電東場業經體員後報書進發當將義產總結華讓說還區應號車設變軍間運農無頭計處話條辦連達認際議門觀論統馬師節級邊幾準轉團調環確據讀寫廣類億樣務龍歲豐飛風雲魚鳥備復夠係歡決規許構優傳禮濟戰歷護麗藝衛雜雞隊險雙離難響額飯驗聯聲職態願視訊記須價質錢錄鐵銀腦臉壞塊夢專歸極樂費禪遠適選遲鄰醫稱種積稅筆簡紅給線終組練細緊綠網廳劍創勞勝壓夾導層帶廠歐齊齒戲撐擊擔擾損換搶掃撿搖檢樓標殘滅滿漢燈獎獨獲瑣療盡監鑰鑑噹嗎嘗嚇嚴圍園圖壇夥奪詞詩該詳語誤課談請負貨責貼賓贏趙輕輪輸辯鄉鄭釋鎮閃閉閒閱陣陰陽隨隱靈買賣麼黃"
+	const simp = "国会这为来与从个对开时过动机关点长问学实电东场业经体员后报书进发当将义产总结华让说还区应号车设变军间运农无头计处话条办连达认际议门观论统马师节级边几准转团调环确据读写广类亿样务龙岁丰飞风云鱼鸟备复够系欢决规许构优传礼济战历护丽艺卫杂鸡队险双离难响额饭验联声职态愿视讯记须价质钱录铁银脑脸坏块梦专归极乐费禅远适选迟邻医称种积税笔简红给线终组练细紧绿网厅剑创劳胜压夹导层带厂欧齐齿戏撑击担扰损换抢扫捡摇检楼标残灭满汉灯奖独获琐疗尽监钥鉴当吗尝吓严围园图坛伙夺词诗该详语误课谈请负货责贴宾赢赵轻轮输辩乡郑释镇闪闭闲阅阵阴阳随隐灵买卖么黄"
+	tradRunes := []rune(trad)
+	simpRunes := []rune(simp)
+	t2s := make(map[rune]rune, len(tradRunes))
+	for i := 0; i < len(tradRunes) && i < len(simpRunes); i++ {
+		t2s[tradRunes[i]] = simpRunes[i]
+	}
+	runes := []rune(s)
+	for i, r := range runes {
+		if simplified, ok := t2s[r]; ok {
+			runes[i] = simplified
+		}
+	}
+	return string(runes)
 }
 
 // buildWhisperURL 根据 baseURL 和协议构建 Whisper API 地址

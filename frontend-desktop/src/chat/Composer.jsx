@@ -75,7 +75,7 @@ export function Composer({ useKB: controlledUseKB, setUseKB: setControlledUseKB 
     return unsub;
   }, [pushNotification]);
 
-  // ─── 录音控制（MediaRecorder + 后端 Whisper API）──────────────────
+  // ─── 录音控制（录完整段再转写，用户手动停止）──────────────────
 
   const startRecording = useCallback(async () => {
     try {
@@ -299,8 +299,8 @@ export function Composer({ useKB: controlledUseKB, setUseKB: setControlledUseKB 
   const hasContent = text.trim() || images.length > 0 || files.length > 0;
 
   return (
-    <div className="px-6 pb-6">
-      <div className="max-w-3xl mx-auto">
+    <div className="px-4 pb-6">
+      <div className="max-w-4xl mx-auto">
         {(sessionUsage.in + sessionUsage.out) > 0 && (
           <div className="mb-2 flex items-center justify-end gap-3 text-xs text-[color:var(--text-faint)]">
             <span className="inline-flex items-center gap-1"><Cpu size={12} />本会话 ↑{formatNum(sessionUsage.in)} ↓{formatNum(sessionUsage.out)}</span>
@@ -399,7 +399,7 @@ export function Composer({ useKB: controlledUseKB, setUseKB: setControlledUseKB 
                   <span className="voice-pulse w-2.5 h-2.5 rounded-full bg-red-500" />
                   <span className="text-xs text-red-600 dark:text-red-400 font-medium">录音中 {recordDuration}s</span>
                   <button onClick={stopRecording} className="ml-auto text-xs text-red-500 hover:text-red-700 font-medium transition">
-                    点击停止
+                    点击停止并识别
                   </button>
                 </>
               ) : (

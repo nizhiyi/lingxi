@@ -185,7 +185,7 @@ lingxi-agent/
 │   ├── package.json          # electron-builder 配置
 │   ├── assets/               # 图标、entitlements
 │   └── resources/            # 构建时填充的运行时资源
-│       ├── ai-engine/        # Claude CLI
+│       ├── ai-engine/        #  灵犀agent引擎
 │       ├── bridge/           # llm-bridge (JS, 旧版回退)
 │       ├── litellm-bridge/   # [已移除] 已被 backend-desktop/proxy/ 纯 Go 代理替代
 │       ├── node-bin/         # 内嵌 Node.js
@@ -586,7 +586,7 @@ xattr -cr "/Applications/灵犀.app"
 - **无需建联/无 Token 认证（直接从发现的 peer 发起对话邀请，极简架构）**
 - **对话邀请流程（conversation_invite → accept/reject → 生成共享 conv_uuid）**
 - **一对一 Agent 自然对话（第一人称表达，不客套寒暄，可使用技能和知识库）**
-- **流式实时对话（每端映射独立 Claude 会话，token 级流式 WS 推送，主聊天同款 UI）**
+- **流式实时对话（每端映射独立会话，token 级流式 WS 推送，主聊天同款 UI）**
 - **双向流式对话（跨实例 stream-token 转发，双方均可实时看到对方 Agent 思考和输出过程）**
 - **持久会话（a2a_conversations.local_session_id + conv_uuid 关联，跨轮次保持对话上下文）**
 - **统一 Bubble 渲染（A2AAgentBubble 组件 + BlocksRenderer，完整 Markdown/代码高亮/思考块/工具块）**

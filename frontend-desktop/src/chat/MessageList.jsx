@@ -62,8 +62,8 @@ export function MessageList() {
   }
 
   return (
-    <div ref={scrollRef} className="flex-1 overflow-y-auto scrollable px-6 pb-2" onScroll={handleScroll}>
-      <div className="max-w-3xl mx-auto py-6">
+    <div ref={scrollRef} className="flex-1 overflow-y-auto scrollable px-4 pb-2" onScroll={handleScroll}>
+      <div className="max-w-4xl mx-auto py-6">
         {items.map((item, i) => (
           <MessageItem key={item.message?.id || `special-${i}`} item={item} />
         ))}
@@ -81,8 +81,8 @@ function VirtualizedList({ items, scrollRef, onScroll }) {
   });
 
   return (
-    <div ref={scrollRef} className="flex-1 overflow-y-auto scrollable px-6 pb-2" onScroll={onScroll}>
-      <div className="max-w-3xl mx-auto py-6 relative" style={{ height: virtualizer.getTotalSize() }}>
+    <div ref={scrollRef} className="flex-1 overflow-y-auto scrollable px-4 pb-2" onScroll={onScroll}>
+      <div className="max-w-4xl mx-auto py-6 relative" style={{ height: virtualizer.getTotalSize() }}>
         {virtualizer.getVirtualItems().map(row => (
           <div
             key={row.key}

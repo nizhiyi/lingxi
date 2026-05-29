@@ -277,7 +277,6 @@ backend-desktop/
 | macOS | Apple Silicon arm64 | 打包目标 |
 | Node.js | 20.19 或 22.12 | Vite 8 要求 |
 | Go | 1.24 | 编译后端 |
-| Claude CLI | 最新 | 内置 AI 引擎 |
 
 ### 构建命令
 
@@ -289,7 +288,7 @@ backend-desktop/
 1. 自动递增 version（patch +1）
 2. `go build` 编译 Go 后端 → `smart-agent`（macOS arm64 + Windows amd64）
 3. `npm run build` 构建前端 → `dist/`
-4. 复制 AI 引擎（Claude CLI）到 `electron/resources/ai-engine/`
+4. 复制 AI 引擎到 `electron/resources/ai-engine/`
 5. Go 协议转换代理已内置于后端（无需外部安装步骤）
 6. 复制 Node.js 运行时到 `electron/resources/node-bin/`
 7. `electron-builder` 打包（macOS + Windows）
@@ -497,7 +496,7 @@ PORT=3099 DB_PATH=/tmp/lingxi-instance2/smart-agent.db FRONTEND_DIST=../frontend
 - [x] 无需建联/无 Token 认证：直接从发现的 peer 发起对话邀请
 - [x] 对话邀请流程（conversation_invite → accept/reject → 生成共享 conv_uuid）
 - [x] 一对一 Agent 自动对话引擎（第一人称自然对话，无客套寒暄）
-- [x] 流式实时对话（每端映射独立 Claude 会话，token 级流式 WS 推送）
+- [x] 流式实时对话（每端映射独立会话，token 级流式 WS 推送）
 - [x] 双向流式对话（跨实例 stream-token 转发，双方均可实时看到对方 Agent 思考和输出）
 - [x] 持久会话（local_session_id 关联 sessions 表，跨轮次保持上下文）
 - [x] 统一 Bubble 渲染（A2AAgentBubble 组件 + BlocksRenderer，完整 Markdown/代码高亮/思考块/工具块）

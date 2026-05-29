@@ -502,9 +502,28 @@ func callVisionLLM(systemPrompt, userMessage, screenshotBase64 string) (string, 
 		return "", fmt.Errorf("未配置模型")
 	}
 
+	// 检查模型是否可能支持视觉（多模态）
+	modelLower := strings.ToLower(model)
+	isLikelyVision := strings.Contains(modelLower, "vl") ||
+		strings.Contains(modelLower, "vision") ||
+		strings.Contains(modelLower, "gpt-4o") ||
+		strings.Contains(modelLower, "gpt-4-turbo") ||
+		strings.Contains(modelLower, "claude-3") ||
+		strings.Contains(modelLower, "claude-4") ||
+		strings.Contains(modelLower, "gemini") ||
+		strings.Contains(modelLower, "glm-4v") ||
+		strings.Contains(modelLower, "qwen2.5-vl") ||
+		strings.Contains(modelLower, "qwen-vl") ||
+		strings.Contains(modelLower, "qvq") ||
+		protocol == "anthropic"
+	if !isLikelyVision {
+		slog.Warn("screen_agent: model may not support vision", "model", model)
+	}
+
 	base := strings.TrimSuffix(baseURL, "/")
 
 	// 构建多模态消息（OpenAI 兼容格式，支持大多数多模态模型）
+	// 对于不支持 detail 字段的供应商（如 Qwen），只传 url
 	userContent := []map[string]interface{}{
 		{
 			"type": "text",
@@ -513,8 +532,7 @@ func callVisionLLM(systemPrompt, userMessage, screenshotBase64 string) (string, 
 		{
 			"type": "image_url",
 			"image_url": map[string]string{
-				"url":    "data:image/png;base64," + screenshotBase64,
-				"detail": "high",
+				"url": "data:image/png;base64," + screenshotBase64,
 			},
 		},
 	}

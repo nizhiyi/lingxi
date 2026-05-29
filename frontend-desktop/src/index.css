@@ -243,13 +243,13 @@ body {
 }
 .assistant-bubble {
   background: var(--bubble-assistant);
-  border: 1px solid var(--line);
+  border: none;
   border-radius: 20px 20px 20px 4px;
   padding: 14px 18px;
   max-width: 86%;
   position: relative;
   box-shadow: 0 1px 3px rgba(15,18,24,.03), 0 4px 20px rgba(15,18,24,.04);
-  transition: border-color .25s ease, box-shadow .25s ease;
+  transition: box-shadow .25s ease;
 }
 .assistant-bubble::before {
   content: '';
@@ -266,7 +266,7 @@ body {
   transition: opacity .3s ease;
 }
 .assistant-bubble:hover::before { opacity: 1; }
-.assistant-bubble:hover { border-color: var(--line-strong); box-shadow: 0 1px 3px rgba(15,18,24,.04), 0 8px 32px rgba(15,18,24,.06); }
+.assistant-bubble:hover { box-shadow: 0 1px 3px rgba(15,18,24,.04), 0 8px 32px rgba(15,18,24,.06); }
 [data-theme="dark"] .assistant-bubble, [data-theme="midnight"] .assistant-bubble {
   box-shadow: 0 1px 2px rgba(0,0,0,.3), 0 4px 20px rgba(0,0,0,.18);
 }
@@ -315,7 +315,7 @@ body {
 /* 输入区 */
 .composer {
   background: var(--bg-elev);
-  border: 1px solid var(--line);
+  border: 1px solid transparent;
   border-radius: 20px;
   box-shadow: 0 4px 24px rgba(15,18,24,.05);
   transition: border-color .25s, box-shadow .3s cubic-bezier(.2,.8,.2,1), transform .25s cubic-bezier(.2,.8,.2,1);
@@ -465,11 +465,9 @@ body {
 
 /* ── 消息气泡霓虹化 ──────────────────────────────────────────── */
 [data-theme="cyber"] .assistant-bubble {
-  border-color: rgba(0,229,255,0.2);
   box-shadow: 0 0 8px rgba(0,229,255,0.08), inset 0 0 16px rgba(0,229,255,0.04);
 }
 [data-theme="cyber"] .assistant-bubble:hover {
-  border-color: rgba(0,229,255,0.4);
   box-shadow: 0 0 20px rgba(0,229,255,0.15), inset 0 0 20px rgba(0,229,255,0.06);
 }
 [data-theme="cyber"] .user-bubble {
