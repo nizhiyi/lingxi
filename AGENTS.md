@@ -88,6 +88,8 @@ lingxi-agent/
 │   │   ├── group_chat.go     # 群聊 HTTP API（创建/列表/发言/撤回/分页消息/邀请处理）
 │   │   ├── group_upload.go   # 群聊图片上传（POST /api/group-chats/upload）
 │   │   ├── agent_personality.go # Agent 群聊人格 CRUD（GET/PUT /api/agents/:id/personality）
+│   │   ├── coding_chat.go    # Coding 模式独立聊天 handler（POST /api/coding/chat + answer-batch）
+│   │   ├── coding_prompt.go  # Coding 专属 system prompt（纯编程助手，无身份伪装）
 │   │   └── ws_hub.go         # WebSocket Hub
 │   ├── connector/            # IM 平台对接（企微/钉钉/飞书）
 │   ├── model/                # 数据模型
@@ -107,6 +109,7 @@ lingxi-agent/
 │   │   └── server.go         # HTTP 服务器（/v1/messages + /health + /v1/models）
 │   ├── router/               # AI 引擎路由（Go 代理管理 + OpenAI 协议桥接）
 │   ├── scheduler/            # 定时任务调度器
+│   ├── dream/                # 记忆巩固引擎（Dream：跨会话记忆整理/合并/精炼/清理）
 │   ├── groupbehavior/        # 群聊行为引擎（人格驱动并发评估 + quirks + 冷场守望者）
 │   ├── vectordb/             # 向量数据库（纯 Go cosine + 分块/嵌入/混合检索）
 │   │   ├── vectordb.go       # 向量 DB 初始化 + CRUD + cosine 搜索 + 配置管理
@@ -125,7 +128,7 @@ lingxi-agent/
 │   │   ├── api/client.js     # fetch 封装
 │   │   ├── state/
 │   │   │   ├── useStore.js   # Zustand store（组合多切片）
-│   │   │   └── slices/       # authSlice/uiSlice/sessionSlice/chatSlice/nexusSlice
+│   │   │   └── slices/       # authSlice/uiSlice/sessionSlice/chatSlice/nexusSlice/codingSlice/codingChatSlice
 │   │   ├── ui/               # 通用 UI
 │   │   │   ├── AppShell.jsx  # 主布局（顶部导航+侧边栏+主区域+AnimatePresence）
 │   │   │   ├── primitives.jsx # 原子组件（Button/Card/Modal/Badge/Input...）
@@ -150,6 +153,25 @@ lingxi-agent/
 │   │   │   ├── MemoryPage.jsx     # 长期记忆管理
 │   │   │   ├── NexusSettingsPage.jsx # 网络与协作设置
 │   │   │   └── UsagePage.jsx       # 用量 + 预算预警
+│   │   ├── ModeSelector.jsx    # 启动模式选择页（灵犀 vs Coding）
+│   │   ├── code/              # 编程视图（Coding Agent，独立模式）
+│   │   │   ├── CodingShell.jsx      # 独立模式布局壳
+│   │   │   ├── CodingChatView.jsx   # 对话主视图（cc-haha 风格）
+│   │   │   ├── CodingComposer.jsx   # 输入栏（文件chip+模型选择器+Run/Stop）
+│   │   │   ├── CodingToolCard.jsx   # 工具调用卡片（颜色编码 + diff）
+│   │   │   ├── CodingIconBar.jsx    # 左侧极窄图标栏
+│   │   │   ├── CodingSidebar.jsx    # 左侧会话侧边栏
+│   │   │   ├── CodingTabBar.jsx     # 顶部多tab会话栏
+│   │   │   ├── AskQuestionBlock.jsx # Agent提问交互块
+│   │   │   ├── PermissionBlock.jsx  # 权限确认块
+│   │   │   ├── TaskTodoList.jsx     # Task Todo List面板
+│   │   │   ├── AgentTeamPanel.jsx   # Agent Teams协作面板
+│   │   │   ├── WorkspaceChanges.jsx # 右侧文件变更面板
+│   │   │   ├── DiffViewer.jsx       # Diff渲染组件
+│   │   │   ├── FileSidebar.jsx      # 文件树侧栏（暖色调 + 搜索过滤 + 拖拽引用）
+│   │   │   ├── AskQuestionWizard.jsx # 渐进式批量问题向导（逐个展示+汇总确认+一次性提交）
+│   │   │   ├── AgentsWindow.jsx     # Cursor 风格 Sub-agent 监控面板
+│   │   │   └── CodingSettingsPage.jsx # Coding 专属设置页（独立于主界面）
 │   │   ├── nexus/            # Agent 间对话（Project Nexus）
 │   │   │   ├── NexusPage.jsx        # 双栏界面（左侧对话列表 + 右侧发现/对话视图，无联系人）
 │   │   │   ├── A2AConversationView.jsx # Agent 对话观察视图
@@ -392,6 +414,20 @@ dist-electron/
 | POST | /api/agents/:id/evolution/extract | ManualExtract | 手动提取知识 |
 | DELETE | /api/evolution/logs/:id | DeleteEvolutionLog | 删除单条进化日志 |
 | POST | /api/evolution/logs/:id/revert | RevertEvolutionLog | 撤销单条进化（恢复记忆/知识/技能） |
+| GET | /api/dream/config | GetDreamConfig | 记忆巩固配置 |
+| PUT | /api/dream/config | UpdateDreamConfig | 更新巩固配置 |
+| GET | /api/dream/status | GetDreamStatus | 巩固运行状态 |
+| POST | /api/dream/trigger | TriggerDream | 手动触发记忆巩固 |
+| GET | /api/agents/:id/dream/history | GetAgentDreamHistory | 巩固历史日志 |
+| GET | /api/files/list | ListDirectory | 列出目录内容（Coding View 文件树） |
+| GET | /api/files/read | ReadFileContent | 读取文件内容 |
+| PUT | /api/files/write | WriteFileContent | 写入文件内容（CodePreview 编辑保存） |
+| GET | /api/files/project | GetProjectInfo | 获取项目信息 |
+| GET | /api/coding/changes | GetWorkspaceChanges | git status 文件变更列表 |
+| GET | /api/coding/diff | GetFileDiff | 文件 git diff |
+| GET | /api/coding/branch | GetGitBranch | 当前 git 分支 |
+| POST | /api/coding/chat | CodingChat | Coding 模式独立聊天入口 |
+| POST | /api/coding/chat/answer-batch | CodingChatAnswerBatch | 批量问题答案提交 |
 | GET | /api/health | HealthCheck | 结构化健康检查 |
 | GET | /api/backup/export | ExportBackup | 导出数据库备份 |
 | POST | /api/skills/batch-export | BatchExportSkills | 批量导出技能 ZIP |
@@ -550,7 +586,7 @@ xattr -cr "/Applications/灵犀.app"
 ### UI/UX
 - 6 套主题（light/dark/midnight/cyber/aurora/cosmos）
 - AnimatePresence 页面切换动画
-- **顶部导航栏（主导航 5 项 + 辅助导航 5 项，layoutId 动画指示器）**
+- **顶部导航栏（主导航 6 项：对话/编程/智能体/技能/知识库/MCP + 辅助导航 5 项，layoutId 动画指示器）**
 - 会话重命名（双击编辑）+ **会话置顶**
 - **会话批量删除**
 - Modal 化删除确认
@@ -571,6 +607,7 @@ xattr -cr "/Applications/灵犀.app"
 ### 长期记忆与上下文
 - **跨会话长期记忆（memories 表，按智能体隔离，自动/手动添加，分类管理）**
 - **记忆管理 UI（设置 > 长期记忆：查看/添加/删除/分类/清空）**
+- **记忆巩固 Dream（后台定时巡检 + LLM 分析跨会话记忆 → 自动合并重复/精炼模糊/补充缺失/清理过时 + 手动触发 + WS 实时进度 + MemoryPage Dream 面板 + 巩固历史日志）**
 - **对话摘要数据模型（sessions.summary 字段，为后续自动摘要压缩做准备）**
 - **会话文件夹数据模型（sessions.folder 字段）**
 - **会话置顶（sessions.pinned 字段，置顶会话排序优先）**
@@ -644,6 +681,7 @@ xattr -cr "/Applications/灵犀.app"
 - **定时任务启动自检 + 实时交互**：启动时补齐缺失 next_run_at；scheduled_task_started/done WS 事件 + ScheduledTasksPage 实时运行中徽章 + AppShell 顶部小红点
 - **会话级自动进化**：每轮对话结束时检测「消息数 ≥ 6 且距上次进化 > 30 分钟」自动 TryAutoEvolution
 - **全局进化扫描器**（`backend-desktop/evolution/scanner.go`）：每 6 小时巡检所有启用进化的 Agent + 安静时段 + 冷却控制 + 前端可视化配置
+- **记忆巩固 Dream**（`backend-desktop/dream/dream.go`）：定时巡检所有启用进化的 Agent，自动整理/合并/精炼/清理记忆库，支持手动触发 + WS 实时进度 + 前端 MemoryPage Dream 面板
 - **聊天富 Markdown 渲染**：MermaidBlock（mermaid v11 ESM 懒加载 + SVG 渲染 + 源码切换 + 放大）+ PlantUMLBlock（pako encode → kroki.io SVG）
 - **System prompt 强化输出格式**：必用 Markdown 元素（标题/列表/表格/代码围栏）+ 主动 Mermaid 图表（流程/时序/架构/状态机/甘特/类图）+ 复杂 UML 用 PlantUML
 - **Agent 群聊（Group Chat）完整实现**：
@@ -692,6 +730,64 @@ xattr -cr "/Applications/灵犀.app"
 - **定时任务页面重构**：渐变 Hero 卡片 + 4 格统计 + 任务卡片（智能体头像/倒计时/进度/hover 操作栏）+ 时间线风格执行记录
 - **用量统计增强**：费用趋势折线图 + 按智能体聚合（头像 + 占比进度条）+ 后端 GroupUsageByAgent / GroupUsageCostByDay + 双列布局
 - **Screen Agent 浏览器控制入口**：面板新增"浏览器"模式 tab + Playwright MCP 就绪状态 + 快捷操作
+
+### Coding View 全面重做（v2026-05 Phase 5）
+- **独立模式架构**：Coding View 提升为与灵犀主模式并肩的独立应用模式（`appMode: 'main' | 'coding'`），首次启动 ModeSelector 选择页，随时可切换
+- **CodingShell 独立布局**：完全独立的布局壳（顶部 tab 栏 + 左侧图标栏 + 左侧会话侧边栏 + 主区域 + 右侧 Workspace Changes + 底部状态栏）
+- **CodingComposer 重做**：文件 chip 附件（拖拽显示文件名，非绝对路径）+ +号文件浏览器 + 内联模型选择器 + Run/Stop 按钮 + 斜杠命令面板
+- **cc-haha 风格渲染**：工具调用聚合卡片 + diff 视图 + 思考折叠 + coding 风格 Markdown + SessionHeader 状态
+- **工具调用卡片颜色编码**：文件操作=蓝色、编辑=紫色、终端=绿色、搜索=橙色 + diff 统计（+N -M）+ 行级颜色
+- **AskQuestionBlock**：Agent 向用户提问的内联交互卡片（单选/自由文本 + Submit）
+- **PermissionBlock**：工具权限确认卡片（Allow / Allow for session / Deny + AWAITING APPROVAL 状态）
+- **TaskTodoList**：内联任务列表面板（进度条 + 编号 + 状态图标 + Agent 派发 + 折叠展开）
+- **AgentTeamPanel**：Agent 团队协作面板（总指挥 + 子代理列表 + Working/Done/Idle 状态 + Start/Stop）
+- **WorkspaceChanges**：右侧 git status 文件变更面板（M/U/D/A 标记 + +N -M 统计 + 搜索过滤）
+- **DiffViewer**：完整 diff 渲染（双行号 + 行级颜色 + 变更统计柱状图 + Copy path）
+- **FileChip**：文件附件 chip（文件类型颜色区分 + 可点击/可移除）
+- **CodingTabBar**：顶部多 tab 会话栏（类似浏览器标签 + 活跃绿点 + 关闭按钮）
+- **CodingSidebar**：左侧会话侧边栏（搜索 + 按日期分组 Today/Yesterday/Earlier）
+- **H5 响应式**：移动端自动隐藏侧边栏/图标栏/tab/Changes，显示 MobileHeader
+- **后端 Coding API**：GET /api/coding/changes + /api/coding/diff + /api/coding/branch
+- **codingSlice**：Zustand 独立切片（项目路径/工作区变更/Diff/Task/Agent Team/Git 分支）
+- **完全独立主题**：强制 `data-theme="light"`，硬编码暖色调，不受主界面主题切换影响
+- **CodingSettingsPage 独立设置页**：模型与接入点/长期记忆/用量统计/远程访问/关于（不复用主界面 SettingsPage）
+- **FileSidebar 文件树**：工作目录文件树（暖色调 + 搜索过滤 + 拖拽文件引用 + 类型颜色区分 + 懒加载）
+- **主界面 Coding 入口**：顶栏"Coding"标签按钮，一键切换模式
+
+### Coding View 增强（v2026-05 Phase 6）
+- **工作目录上下文注入**：Chat API 新增 `workingDir` 参数，后端 `cmd.Dir` + system prompt 注入，AI 在正确的项目目录下工作
+- **文件夹拖拽引用**：FileSidebar/CodingComposer 支持拖拽文件夹，FileChip 区分文件/文件夹，文件浏览器可附加整个目录
+- **TaskTodoList 实时集成**：`TodoWrite` 工具调用 → `task_update` WS 事件 → codingTasks 实时更新 → 消息流内联进度面板
+- **AskQuestion/Permission 内联**：`ask_question`/`permission_request` WS 事件 → 内联交互卡片（单选/文本 + Allow/Deny）
+- **Agent 状态增强**：ThinkingIndicator 详细状态 + 实时计时 + SessionHeader 显示项目名/状态
+- **ToolGroupCard 增强**：工具组总耗时 + 工具名预览 + Zap 图标
+- **UserMessage 文件引用渲染**：`@file` 和 `[目录:]` 引用解析为 chip 标签
+- **交互式选择/输入块渲染**：检测 AI 回复中的 `choice`/`input` JSON 代码块，自动渲染为可点击的选项卡片和输入表单（InteractiveChoiceBlock/InteractiveInputBlock），替代纯代码块展示
+- **任务计划 task_plan**：系统 prompt 指导 AI 在多步骤任务前输出 `task_plan` JSON 块，后端 `emitTaskPlanFromText` 检测并推送 `task_update` WS 事件
+- **StickyTaskBar 吸顶任务栏**：任务进度条固定在聊天区域顶部，显示当前执行步骤/完成数/总数/可展开查看详情，实时根据 AI 输出更新
+- **智能体选择器（Agent Picker）**：CodingComposer 工具栏新增 Agent 选择器下拉菜单，显示当前智能体名称/头像，支持一键切换
+- **代码预览面板（CodePreview）**：点击 FileSidebar 文件时右侧弹出代码预览面板（语法高亮 + 行号 + 复制 + 插入到对话），暖色调 light 主题
+- **WorkspaceChanges 实时刷新**：集成后端 `/api/coding/changes` API，30 秒自动刷新 + 手动刷新，点击变更文件可预览
+- **Cmd+K 全文搜索**：Coding View 支持 Cmd+K 快捷键弹出搜索面板
+- **消息操作栏**：UserMessage hover 复制/编辑（内联编辑+重发）；AssistantMessage hover 复制
+
+### Coding View 深度优化（v2026-05 Phase 8）
+- **裸 JSON 交互块检测**：前后端均支持检测未包在代码围栏内的裸 JSON 交互对象（花括号配对扫描），解决 AI 输出裸 `choice`/`input`/`task_plan` JSON 时无法渲染交互 UI 的问题
+- **后端 emitInteractiveFromText**：`content_block_stop` 时检测文本中的 `choice`/`input` JSON → 推送 `ask_question` WS 事件
+- **代码预览上方布局**：CodePreview 面板从右侧分栏改为聊天区域上方展示
+- **代码编辑保存**：CodePreview 支持 Edit/Save 模式切换 + Cmd+S 快捷保存 + 展开/收起
+- **后端文件写入 API**：`PUT /api/files/write`（WriteFileContent），前端 `api.writeFile`
+- **Coding 会话与主界面会话隔离**：`sessions.mode` 列（`''`=通用, `'coding'`=编程），ListSessions API 支持 `?mode=coding` 筛选，CreateSession 自动携带 mode。切换 appMode 时清空当前会话并刷新
+
+### Coding View 全面重构（v2026-05 Phase 9）
+- **后端 Chat 逻辑分离**：独立 `coding_chat.go` + `coding_prompt.go`，`POST /api/coding/chat` 和 `POST /api/coding/chat/answer-batch`，Coding 模式使用纯编程 system prompt
+- **AskQuestion 批量缓冲协议**：后端缓冲所有问题直到 `message_stop`，通过 `ask_questions_batch` WS 事件一次性推送；支持 `questions_batch` JSON 格式
+- **Sub-agent 事件检测**：检测 Claude Code 输出中的 sub-agent 创建/完成信号，推送 `subagent_start`/`subagent_done` WS 事件
+- **前端状态层分离**：`codingChatSlice.js` 独立管理 Coding 消息/流式/Agent 状态，WS 事件路由按 `appMode` 分发
+- **AskQuestion 渐进式向导**：`AskQuestionWizard.jsx` 实现批量问题逐个展示 + 汇总确认 + 一次性提交
+- **Agents Window**：`AgentsWindow.jsx` Cursor 风格 Sub-agent 监控面板（主 Agent 卡片+子 Agent 列表+实时状态）
+- **CodePreview 右侧分栏**：CodePreview 从聊天上方改为右侧分栏（flex 布局+可拖拽宽度+多文件标签页+Cmd+F 搜索+Tab 缩进）
+- **TaskTodoList 增强**：双向同步 + 子任务支持 + 任务耗时；StickyTaskBar 增加跳过/取消操作按钮
 
 ### 纯 Go 协议转换代理（v2026-05 Phase 3）
 - **替代 LiteLLM Bridge**：`backend-desktop/proxy/` 纯 Go 实现，启动零延迟、无 Python 依赖

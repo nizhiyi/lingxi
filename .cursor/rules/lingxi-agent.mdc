@@ -134,9 +134,9 @@ src/
 ├── api/client.js         # API 请求封装
 ├── state/
 │   ├── useStore.js       # Zustand 全局状态（组合多切片）
-│   └── slices/           # 状态切片（authSlice/uiSlice/sessionSlice/chatSlice/nexusSlice）
+│   └── slices/           # 状态切片（authSlice/uiSlice/sessionSlice/chatSlice/nexusSlice/codingSlice）
 ├── ui/                   # 通用 UI 组件
-│   ├── AppShell.jsx      # 主布局壳（顶部导航：主导航5项 + 辅助导航5项，无代码空间）
+│   ├── AppShell.jsx      # 主布局壳（顶部导航：主导航6项 + 辅助导航5项）
 │   ├── primitives.jsx    # 原子组件
 │   ├── cn.js             # className 合并工具
 │   ├── SidebarSessions.jsx # 会话列表（置顶/重命名/批量删除）
@@ -162,6 +162,27 @@ src/
 │   ├── MemoryPage.jsx    # 长期记忆管理
 │   ├── NexusSettingsPage.jsx # 网络与协作设置
 │   └── UsagePage.jsx     # 用量统计 + 预算预警
+├── ModeSelector.jsx      # 启动模式选择页（灵犀主模式 vs Coding Agent）
+├── code/                 # 编程视图（Coding Agent，独立模式）
+│   ├── CodingShell.jsx   # 独立模式布局壳（tab栏+图标栏+侧边栏+主区域+Changes面板+状态栏）
+│   ├── CodingChatView.jsx # 对话主视图（cc-haha 风格渲染）
+│   ├── CodingComposer.jsx # 输入栏（文件chip+文件浏览器+模型选择器+Run/Stop）
+│   ├── CodingToolCard.jsx # 工具调用卡片（颜色编码 + diff 渲染）
+│   ├── CodingIconBar.jsx # 左侧极窄图标栏（40px）
+│   ├── CodingSidebar.jsx # 左侧会话侧边栏（搜索+日期分组）
+│   ├── CodingTabBar.jsx  # 顶部多tab会话栏
+│   ├── SessionHeader.jsx # 会话标题+状态信息
+│   ├── AskQuestionBlock.jsx # Agent提问交互块
+│   ├── PermissionBlock.jsx # 权限确认块
+│   ├── TaskTodoList.jsx  # Task Todo List面板
+│   ├── AgentTeamPanel.jsx # Agent Teams协作面板
+│   ├── WorkspaceChanges.jsx # 右侧文件变更面板
+│   ├── DiffViewer.jsx    # Diff渲染组件
+│   ├── FileChip.jsx      # 文件附件chip组件
+│   ├── BottomStatusBar.jsx # 底部状态栏
+│   ├── CodingSettingsPage.jsx # Coding 专属设置页（独立于主界面）
+│   ├── CodeView.jsx      # 旧版编程视图（保留兼容）
+│   └── FileSidebar.jsx   # 文件树侧栏（暖色调 + 搜索过滤 + 拖拽引用）
 ├── nexus/                # Agent 间对话（Project Nexus）
 │   ├── NexusPage.jsx     # 双栏通信界面（左侧对话列表 + 右侧发现/对话视图，无联系人）
 │   ├── A2AConversationView.jsx # Agent 对话观察视图（嵌入 NexusPage 右侧主区）
@@ -255,6 +276,7 @@ backend-desktop/
 ├── router/              # AI 引擎路由（Go 代理管理 + OpenAI 协议桥接）
 ├── scheduler/           # 定时任务调度器（已修复时区 BUG + 启动自检 + WS 流式广播）
 ├── evolution/           # 全局自我进化扫描器（定时巡检 + 安静时段 + 冷却）
+├── dream/              # 记忆巩固引擎（Dream：跨会话记忆整理/合并/精炼/清理）
 ├── vectordb/            # 向量数据库（纯 Go cosine + 分块 + 嵌入 + 混合检索）
 │   ├── vectordb.go      # 向量 DB 初始化 + CRUD + cosine 搜索 + 配置管理
 │   ├── chunker.go       # 文本递归分块（512 字符/块，128 重叠）
@@ -371,7 +393,7 @@ PORT=3099 DB_PATH=/tmp/lingxi-instance2/smart-agent.db FRONTEND_DIST=../frontend
 - [x] Tailwind + primitives 统一 UI 体系
 - [x] 6 套主题（light/dark/midnight/cyber/aurora/cosmos）
 - [x] AnimatePresence 页面切换动画
-- [x] 顶部导航栏（主导航 5 项：对话/智能体/技能/知识库/MCP + 辅助导航 5 项：Nexus/IM/工作流/定时/设置）
+- [x] 顶部导航栏（主导航 6 项：对话/编程/智能体/技能/知识库/MCP + 辅助导航 5 项：Nexus/IM/工作流/定时/设置）
 - [x] 代码空间模块已移除（v1.0.13）
 - [x] 代码块语法高亮 + 复制按钮（prism-react-renderer）
 - [x] 消息复制按钮
@@ -413,6 +435,7 @@ PORT=3099 DB_PATH=/tmp/lingxi-instance2/smart-agent.db FRONTEND_DIST=../frontend
 - [x] WS 流式 token 50ms 缓冲刷新（减少高频 set() 触发的 React 重渲染）
 - [x] 自我进化 UI（Agent 编辑器内进化开关 + 进化日志查看/清空 + 消息气泡「提取知识」按钮）
 - [x] 自我进化全面重做（实时进度面板 + 对话内联通知 + 撤销能力 + 进化历程页筛选/搜索/可读卡片 + 提取按钮增强 + 会话级提取建议）
+- [x] 记忆巩固 Dream（后台自动整理/合并/精炼/清理记忆，定时巡检 + 手动触发 + WS 实时进度 + MemoryPage Dream 面板 + 巩固历史）
 
 ### 后端
 - [x] 知识库支持 PDF/DOCX 格式
@@ -550,6 +573,7 @@ PORT=3099 DB_PATH=/tmp/lingxi-instance2/smart-agent.db FRONTEND_DIST=../frontend
 - [x] **会话级自动进化**：消息数 ≥ 6 且距上次进化 > 30 分钟时自动触发 auto_session_end
 - [x] **全局自动进化扫描器**：backend-desktop/evolution/scanner.go 每 6 小时巡检所有启用进化的 Agent，找出冷却完毕且消息数 ≥ N 的会话自动提取，支持安静时段配置
 - [x] **进化扫描器配置 API**：GET/PUT /api/evolution/scanner-config，EvolutionPage 顶部面板可视化配置
+- [x] **记忆巩固 Dream**：backend-desktop/dream/dream.go 定时巡检 + 跨会话记忆整理（合并/精炼/补充/清理）+ 手动触发 API + WS 实时进度广播
 - [x] **聊天富渲染**：MermaidBlock（mermaid v11 ESM 懒加载 + SVG 渲染 + 源码切换 + 放大）+ PlantUMLBlock（pako encode + kroki.io SVG）
 - [x] **System prompt 强化输出格式**：必用 Markdown 元素（标题/列表/表格/代码围栏）+ 主动使用 Mermaid 图表（流程/时序/架构/状态机/甘特/类图等）+ 复杂 UML 用 PlantUML
 - [x] **信令服务器 relay_multi 多播**：一份 data 同时分发给多个 peer，群聊广播成本从 O(N) 往返降为 O(1)
@@ -565,7 +589,84 @@ PORT=3099 DB_PATH=/tmp/lingxi-instance2/smart-agent.db FRONTEND_DIST=../frontend
 - [x] **定时任务页面重构**（渐变 Hero + 4 格统计 + 任务卡片增强 + 时间线执行记录）
 - [x] **用量统计增强**（费用趋势折线图 + 按智能体聚合 + GroupUsageByAgent API + 双列布局）
 - [x] **Screen Agent 浏览器控制入口**（面板新增 Browser 模式 tab + Playwright MCP 就绪状态 + 快捷操作）
+- [x] **Coding View 编程视图**（全屏深色终端风格界面，工具调用卡片颜色编码，文件树侧栏，项目目录选择器，独立于通用助理的专业编程 Agent 体验）
 - [x] 技能管理（AI 生成/ZIP 导入/批量上传/在线编辑/导出/市场安装）
 - [x] Windows 构建支持（NSIS + Portable）
 - [x] 冷启动优化（Splash 页立即显示，后端就绪后无缝切换）
 - [x] 本地离线语音识别（内置 whisper.cpp + ggml-base 模型）
+
+### Coding View 全面重做（v2026-05 Phase 5）
+- [x] **独立模式架构**：Coding View 提升为与灵犀主模式并肩的独立模式（`appMode: 'main' | 'coding'`），首次启动显示 ModeSelector 选择页，持久化到 localStorage，随时可切换
+- [x] **CodingShell 独立布局**：完全独立于 AppShell 的布局壳（顶部 tab 栏 + 左侧图标栏 + 左侧会话侧边栏 + 主区域 + 右侧 Workspace Changes 面板 + 底部状态栏）
+- [x] **CodingComposer 重做**：文件 chip 附件（拖拽不再显示绝对路径，而是显示可点击/可移除的文件名 chip）+ +号文件浏览器 + 内联模型选择器 + Run/Stop 按钮 + 斜杠命令面板
+- [x] **CodingChatView 渲染重做**：cc-haha 风格的 AI 回复渲染（工具调用聚合卡片 + diff 视图 + 思考折叠 + coding 风格 Markdown + token 显示 + SessionHeader 状态信息）
+- [x] **CodingToolCard**：文件操作=蓝色、编辑=紫色、终端=绿色、搜索=橙色，可折叠展开查看详情 + 文件路径 Copy + diff 统计（+N -M）+ 行级颜色编码
+- [x] **AskQuestionBlock**：Agent 向用户提问的内联交互卡片（单选/自由文本 + Submit 按钮）
+- [x] **PermissionBlock**：Agent 请求工具权限的确认卡片（Allow / Allow for session / Deny + 可展开查看完整输入参数 + AWAITING APPROVAL 状态标记）
+- [x] **TaskTodoList**：内联任务列表面板（进度条 + 编号 + 状态图标 + Agent 派发信息 + 折叠展开）
+- [x] **AgentTeamPanel**：Agent 团队协作面板（总指挥 Crown 标记 + 子代理列表 + Working/Done/Idle 状态 + 添加/移除成员 + Start/Stop Team）
+- [x] **WorkspaceChanges**：右侧 Workspace Changes 面板（git status 文件变更列表 + M/U/D/A 状态标记 + +N -M 变更统计 + 搜索过滤）
+- [x] **DiffViewer**：完整 diff 渲染组件（双行号 + 行级颜色 + 变更统计柱状图 + Copy path）
+- [x] **FileChip**：文件附件 chip 组件（文件类型颜色区分 + 悬停显示完整路径 + 可点击/可移除）
+- [x] **BottomStatusBar**：底部状态栏（项目路径 + git 分支 + 工作树选择器）
+- [x] **CodingIconBar**：左侧极窄图标栏（40px，logo/新建/会话/定时任务/已更改文件/设置/模式切换）
+- [x] **CodingSidebar**：左侧会话侧边栏（搜索 + 按日期分组 Today/Yesterday/Earlier + 悬停删除）
+- [x] **CodingTabBar**：顶部多 tab 会话栏（类似浏览器标签，显示多个会话 + 活跃状态绿点 + 关闭按钮）
+- [x] **H5 响应式适配**：移动端自动隐藏侧边栏/图标栏/tab栏/Workspace Changes，显示简化的 MobileHeader
+- [x] **后端 Coding API**：GET /api/coding/changes（git status 文件变更）+ GET /api/coding/diff（文件 diff）+ GET /api/coding/branch（git 分支）
+- [x] **codingSlice**：Zustand 独立切片管理 Coding 模式状态（项目路径/工作区变更/Diff/Task/Agent Team/Git 分支）
+- [x] **完全独立主题**：Coding View 强制 `data-theme="light"`，所有组件使用硬编码暖色调，不受主界面主题切换影响
+- [x] **CodingSettingsPage 独立设置页**：Coding View 专属设置页（模型与接入点/长期记忆/用量统计/远程访问/关于），不复用灵犀主界面的 SettingsPage
+- [x] **FileSidebar 文件树**：项目工作目录文件树侧栏（暖色调主题 + 搜索过滤 + 拖拽文件引用 + 文件类型颜色区分 + 懒加载递归展开）
+- [x] **主界面 Coding 快捷入口**：主界面顶栏显示"Coding"按钮（暖棕色标签样式），点击一键切换到 Coding 模式
+- [x] **AppShell 模式分离**：移除 'code' NAV_TAB，添加 Code2 模式切换按钮，appMode 判断渲染 CodingShell 或主模式布局
+
+### Coding View 交互增强（v2026-05 Phase 6）
+- [x] **交互式选择/输入块渲染**：检测 AI 回复中的 `choice`/`input` JSON 代码块，自动渲染为可点击的选项卡片和输入表单（InteractiveChoiceBlock/InteractiveInputBlock），替代纯代码块展示
+- [x] **任务计划 task_plan**：AI 在多步骤任务开始前输出 `task_plan` JSON 块，后端检测并推送 `task_update` WS 事件，前端实时渲染进度
+- [x] **StickyTaskBar 吸顶任务栏**：任务进度条固定在聊天区域顶部，显示当前执行步骤、完成数/总数、进度百分比，可展开查看所有步骤详情
+- [x] **任务状态实时更新**：AI 每完成一步输出更新后的 task_plan（status: completed/in_progress/pending），后端检测推送，前端 codingTasks 合并更新，吸顶栏实时刷新
+- [x] **智能体选择器（Agent Picker）**：CodingComposer 工具栏内嵌 Agent 选择器，显示当前智能体名称/头像，点击弹出下拉菜单切换智能体
+- [x] **后端系统 prompt 增强**：新增"任务计划"指令段，要求 AI 在多步骤编码任务前输出 task_plan JSON 块，并在每步完成后更新状态
+- [x] **代码预览面板（CodePreview）**：点击 FileSidebar 文件时右侧弹出代码预览面板（语法高亮 + 行号 + 复制 + 插入到对话），暖色调 light 主题
+- [x] **WorkspaceChanges 实时刷新**：集成后端 `/api/coding/changes` API，30 秒自动刷新 + 手动刷新按钮，点击变更文件可预览
+- [x] **Cmd+K 全文搜索**：Coding View 支持 Cmd+K 快捷键弹出搜索面板，搜索所有会话消息
+- [x] **消息操作栏**：UserMessage hover 显示复制/编辑按钮，支持内联编辑+重发；AssistantMessage hover 显示复制按钮
+
+### Coding View 增强（v2026-05 Phase 6）
+- [x] **工作目录上下文注入**：Chat API 新增 `workingDir` 参数，后端设置 `cmd.Dir` 为用户选择的项目路径 + system prompt 注入工作目录信息，AI 不再去错误的目录查找文件
+- [x] **文件夹拖拽引用**：FileSidebar 和 CodingComposer 支持拖拽文件夹（不仅限文件），FileChip 区分文件/文件夹图标，文件浏览器可附加整个目录
+- [x] **TaskTodoList 实时集成**：后端检测 `TodoWrite` 工具调用并推送 `task_update` WS 事件，前端 codingTasks 状态实时更新，消息流内联渲染任务进度面板
+- [x] **AskQuestion / Permission 内联渲染**：新增 `ask_question` / `permission_request` WS 事件，CodingChatView 内联渲染交互卡片（单选/文本问答 + Allow/Deny 权限确认）
+- [x] **Agent 状态增强**：ThinkingIndicator 显示详细状态（Thinking/Reading/Executing/Waiting）+ 已用时间实时计数
+- [x] **ToolGroupCard 增强**：工具组卡片显示总耗时 + 工具名称列表预览 + Zap 闪电图标
+- [x] **UserMessage 文件引用渲染**：用户消息自动提取 @file 和 [目录:] 引用，渲染为文件/文件夹 chip 标签
+- [x] **SessionHeader 增强**：显示项目名称 + 实时 agent 状态（thinking/reading/executing）
+- [x] **会话切换清理**：切换会话时自动清空 codingTasks 状态
+
+### Coding View 深度优化（v2026-05 Phase 8）
+- [x] **裸 JSON 交互块检测**：前端 `splitInteractiveBlocks` 和后端 `emitInteractiveFromText`/`emitTaskPlanFromText` 均支持检测未包在代码围栏内的裸 JSON 对象（通过花括号配对扫描），解决 AI 输出裸 `choice`/`input`/`task_plan` JSON 时前端无法渲染交互 UI 的问题
+- [x] **后端 emitInteractiveFromText**：新增函数，在 `content_block_stop` 时检测文本中的 `choice`/`input` JSON 块并推送 `ask_question` WS 事件，确保交互块即使未被代码围栏包裹也能被前端渲染
+- [x] **代码预览上方布局**：CodePreview 面板从右侧分栏改为聊天区域上方展示，点击文件时在聊天上方打开可编辑的代码视图
+- [x] **代码编辑保存**：CodePreview 支持 Edit/Save 模式切换 + Cmd+S 快捷保存 + 展开/收起 + 行号编辑器
+- [x] **后端文件写入 API**：新增 `PUT /api/files/write` 端点（`WriteFileContent` handler），前端 `api.writeFile` 方法，支持 CodePreview 编辑保存
+- [x] **Coding 会话与主界面会话隔离**：`sessions` 表新增 `mode` 列（`''`=通用, `'coding'`=编程），`ListSessions` API 支持 `mode` 查询参数，`CreateSession` 自动携带当前 `appMode`。Coding View 的会话不在灵犀主界面显示，主界面会话不在 Coding View 显示。切换模式时自动刷新会话列表
+
+### Coding View 全面重构（v2026-05 Phase 9）
+- [x] **后端 Chat 逻辑分离**：新增 `coding_chat.go` + `coding_prompt.go`，独立 `POST /api/coding/chat` 和 `POST /api/coding/chat/answer-batch` API，Coding 模式使用纯编程 system prompt（无身份伪装/保密规则），独立 `runCodingClaude` 执行流
+- [x] **AskQuestion 批量缓冲**：后端 `runCodingClaude` 缓冲所有 `ask_question` 直到 `message_stop`，然后一次性通过 `ask_questions_batch` WS 事件推送给前端
+- [x] **questions_batch 协议**：system prompt 要求 AI 输出 `questions_batch` JSON 块，后端 `extractQuestionsBatch` 检测并缓冲
+- [x] **Sub-agent 事件检测**：`detectSubAgentEvents` 正则检测 Claude Code 输出中的 sub-agent 创建/完成信号，推送 `subagent_start`/`subagent_done` WS 事件
+- [x] **前端状态层分离**：新增 `codingChatSlice.js`，独立 `codingMessages`/`codingLiveBlocks`/`codingIsStreaming`/`codingAgentState` 等状态
+- [x] **WS 事件路由**：`useStore.initStore` 中根据 `appMode` 分发 WS 事件到 `codingHandleWSEvent` 或 `handleWSEvent`，Coding 模式完全不影响主模式状态
+- [x] **独立 Coding 发送**：`codingSendMessage` 调用 `POST /api/coding/chat`，不复用通用 `sendMessage`
+- [x] **AskQuestion 渐进式向导**：新增 `AskQuestionWizard.jsx`，批量问题缓冲→逐个展示（进度指示器+上一步/下一步导航）→汇总确认页→一次性提交，对话不中断
+- [x] **Agents Window**：新增 `AgentsWindow.jsx`，Cursor 风格 Sub-agent 监控面板（主 Agent 卡片+子 Agent 卡片列表+实时状态更新+进度条+折叠展开）
+- [x] **CodePreview 布局修复**：从"聊天区域上方"改为"右侧分栏"（flex 布局，可拖拽调整宽度），避免遮挡聊天内容
+- [x] **CodePreview 多文件标签页**：同时预览多个文件，标签页切换+关闭按钮
+- [x] **CodePreview 搜索**：Cmd+F 唤起搜索栏，实时高亮匹配行，上/下导航
+- [x] **CodePreview Tab 缩进**：编辑模式下 Tab 键插入 2 空格，Shift+Tab 反缩进
+- [x] **TaskTodoList 增强**：双向同步（用户点击 checkbox 发送指令给 AI）+ 子任务支持（递归渲染嵌套任务）+ 任务耗时显示
+- [x] **StickyTaskBar 增强**：增加"跳过当前任务"和"取消所有任务"操作按钮 + 实时耗时显示 + 展开/收起详情
+- [x] **CodingChatView 重写**：所有状态引用从 `chatSlice` 切换到 `codingChatSlice`，包括 UserMessage/AssistantMessage/TextBlock/LiveBlock/ThinkingIndicator/SessionHeader/CodingComposer
+- [x] **会话切换清理增强**：`setActiveSession` 同时清空 Coding 独立状态（messages/liveBlocks/streaming/questions/subAgents）

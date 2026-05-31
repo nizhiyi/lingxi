@@ -26,8 +26,12 @@ export const api = {
   saveOAuthConfig: (data) => req('POST', '/api/auth/oauth-configs', data),
 
   // sessions
-  listSessions: (agentId) =>
-    req('GET', `/api/sessions${agentId != null ? `?agent_id=${agentId}` : ''}`),
+  listSessions: (agentId, mode) => {
+    const params = [];
+    if (agentId != null) params.push(`agent_id=${agentId}`);
+    if (mode) params.push(`mode=${mode}`);
+    return req('GET', `/api/sessions${params.length ? '?' + params.join('&') : ''}`);
+  },
   createSession: (titleOrPayload) =>
     req('POST', '/api/sessions',
       typeof titleOrPayload === 'string'
@@ -49,6 +53,12 @@ export const api = {
   // chat
   sendChat: (payload) => req('POST', '/api/chat', payload),
   abortChat: (sessionId) => req('POST', '/api/chat/abort', { sessionId: String(sessionId) }),
+  restoreSession: (sessionId, messageId, workingDir, revertCode) =>
+    req('POST', `/api/sessions/${sessionId}/restore`, { messageId, workingDir, revertCode }),
+
+  // coding chat (独立于通用 chat)
+  sendCodingChat: (payload) => req('POST', '/api/coding/chat', payload),
+  submitCodingAnswerBatch: (payload) => req('POST', '/api/coding/chat/answer-batch', payload),
 
   // providers + profiles
   listProviders: () => req('GET', '/api/providers'),
@@ -215,6 +225,24 @@ export const api = {
   getEvolutionStats: () => req('GET', '/api/evolution/stats'),
   getEvolutionScannerConfig: () => req('GET', '/api/evolution/scanner-config'),
   updateEvolutionScannerConfig: (cfg) => req('PUT', '/api/evolution/scanner-config', cfg),
+
+  // ── 记忆巩固（Dream）──────────────────────────────────────────
+  getDreamConfig: () => req('GET', '/api/dream/config'),
+  updateDreamConfig: (cfg) => req('PUT', '/api/dream/config', cfg),
+  getDreamStatus: () => req('GET', '/api/dream/status'),
+  triggerDream: (agentId) => req('POST', '/api/dream/trigger', { agent_id: agentId }),
+  getAgentDreamHistory: (agentId, limit = 20) => req('GET', `/api/agents/${agentId}/dream/history?limit=${limit}`),
+
+  // ── 文件浏览（代码视图）──────────────────────────────────────
+  listDirectory: (dirPath) => req('GET', `/api/files/list?path=${encodeURIComponent(dirPath || '')}`),
+  readFile: (filePath) => req('GET', `/api/files/read?path=${encodeURIComponent(filePath)}`),
+  writeFile: (filePath, content) => req('PUT', '/api/files/write', { path: filePath, content }),
+  getProjectInfo: (dirPath) => req('GET', `/api/files/project?path=${encodeURIComponent(dirPath || '')}`),
+
+  // ── Coding 模式 ──────────────────────────────────────────────
+  getCodingChanges: (dirPath) => req('GET', `/api/coding/changes?path=${encodeURIComponent(dirPath || '')}`),
+  getCodingDiff: (dirPath, file) => req('GET', `/api/coding/diff?path=${encodeURIComponent(dirPath || '')}&file=${encodeURIComponent(file)}`),
+  getCodingBranch: (dirPath) => req('GET', `/api/coding/branch?path=${encodeURIComponent(dirPath || '')}`),
 
   // ── 数据备份 ─────────────────────────────────────────────────
   exportBackup: () => `${BASE}/api/backup/export`,

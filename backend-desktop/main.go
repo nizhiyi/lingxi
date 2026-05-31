@@ -15,6 +15,7 @@ import (
 	"lingxi-agent/config"
 	"lingxi-agent/connector"
 	"lingxi-agent/db"
+	"lingxi-agent/dream"
 	"lingxi-agent/evolution"
 	"lingxi-agent/grouploop"
 	"lingxi-agent/handler"
@@ -103,6 +104,7 @@ func main() {
 	// 挂起任务
 	api.GET("/sessions/:id/pending", handler.GetPendingTask)
 	api.DELETE("/sessions/:id/pending", handler.ClearPendingTask)
+	api.POST("/sessions/:id/restore", handler.RestoreSession)
 
 	// 后台任务
 	api.GET("/tasks", handler.ListTasks)
@@ -322,6 +324,26 @@ func main() {
 	api.GET("/evolution/scanner-config", handler.GetEvolutionScannerConfig)
 	api.PUT("/evolution/scanner-config", handler.UpdateEvolutionScannerConfig)
 
+	// ── 记忆巩固（Dream）───────────────────────────────────────────
+	api.GET("/dream/config", handler.GetDreamConfig)
+	api.PUT("/dream/config", handler.UpdateDreamConfig)
+	api.GET("/dream/status", handler.GetDreamStatus)
+	api.POST("/dream/trigger", handler.TriggerDream)
+	api.GET("/agents/:id/dream/history", handler.GetAgentDreamHistory)
+
+	// ── 文件浏览（代码视图）─────────────────────────────────────
+	api.GET("/files/list", handler.ListDirectory)
+	api.GET("/files/read", handler.ReadFileContent)
+	api.PUT("/files/write", handler.WriteFileContent)
+	api.GET("/files/project", handler.GetProjectInfo)
+
+	// Coding 模式专用 API
+	api.GET("/coding/changes", handler.GetWorkspaceChanges)
+	api.GET("/coding/diff", handler.GetFileDiff)
+	api.GET("/coding/branch", handler.GetGitBranch)
+	api.POST("/coding/chat", handler.CodingChat)
+	api.POST("/coding/chat/answer-batch", handler.CodingChatAnswerBatch)
+
 	// Electron 启动时下发激活档案明文 token
 	api.POST("/runtime/active-secret", handler.SetActiveSecret)
 
@@ -376,6 +398,10 @@ func main() {
 	evolution.Init(handler.RunEvolutionAnalysisExternal, handler.BuildConversationContextExternal, handler.BroadcastWSEvent)
 	evolution.StartScanner()
 
+	// 启动记忆巩固扫描器（Dream）
+	dream.Init(handler.CallActiveLLMExternal, handler.BuildConversationContextExternal, handler.BroadcastWSEvent)
+	dream.StartScanner()
+
 	// 启动文件监控
 	watcher.Start()
 
@@ -406,6 +432,7 @@ func main() {
 	close(backupStop)
 	watcher.Stop()
 	scheduler.Stop()
+	dream.Stop()
 	nexus.Global.Stop()
 	grouploop.StopAll()
 

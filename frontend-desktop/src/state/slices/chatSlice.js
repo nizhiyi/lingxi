@@ -77,6 +77,7 @@ export const createChatSlice = (set, get) => ({
   evolutionActivity: [],
   evolutionProgress: null,
   evolutionResults: [],
+  dreamProgress: null,
   screenAgentMode: false,
   screenAgentAnalyzing: false,
   screenAgentResult: null,
@@ -239,6 +240,68 @@ export const createChatSlice = (set, get) => ({
         bufferToken('text', text, set, get);
         break;
       }
+      case 'task_update': {
+        const newTasks = Array.isArray(payload?.todos) ? payload.todos : [];
+        if (newTasks.length > 0) {
+          const existing = get().codingTasks;
+          let merged;
+          if (existing.length > 0 && newTasks.length > 0) {
+            const map = new Map(existing.map(t => [t.id, t]));
+            for (const t of newTasks) map.set(t.id, t);
+            merged = Array.from(map.values());
+          } else {
+            merged = newTasks;
+          }
+          set({ codingTasks: merged });
+          flushNow(set, get);
+        }
+        break;
+      }
+      case 'ask_question': {
+        flushNow(set, get);
+        const blocks = [...get().liveBlocks];
+        blocks.push({
+          type: 'ask_question',
+          question: payload?.question || '',
+          options: payload?.options || [],
+          allowCustom: payload?.allow_custom !== false,
+          id: payload?.id || Date.now(),
+        });
+        set({ liveBlocks: blocks });
+        break;
+      }
+      case 'permission_request': {
+        flushNow(set, get);
+        const blocks = [...get().liveBlocks];
+        blocks.push({
+          type: 'permission',
+          toolName: payload?.tool_name || '',
+          input: payload?.input || '',
+          id: payload?.id || Date.now(),
+        });
+        set({ liveBlocks: blocks });
+        break;
+      }
+      case 'file_diff': {
+        const diffs = get().liveDiffs || [];
+        const existing = diffs.findIndex(d => d.file === payload?.file);
+        const entry = {
+          file: payload?.file || '',
+          diff: payload?.diff || '',
+          tool: payload?.tool || '',
+          isNew: payload?.is_new || false,
+          added: payload?.added || 0,
+          removed: payload?.removed || 0,
+          ts: Date.now(),
+        };
+        if (existing >= 0) {
+          diffs[existing] = entry;
+          set({ liveDiffs: [...diffs] });
+        } else {
+          set({ liveDiffs: [...diffs, entry] });
+        }
+        break;
+      }
       case 'tool_start': {
         flushNow(set, get);
         const blocks = [...get().liveBlocks];
@@ -399,6 +462,38 @@ export const createChatSlice = (set, get) => ({
         evoLog.unshift({ phase: 'reverted', ...info, ts: Date.now() });
         if (evoLog.length > 50) evoLog.length = 50;
         set({ evolutionActivity: evoLog });
+        break;
+      }
+      case 'dream_progress':
+      case 'dream_scan_start':
+      case 'dream_scan_done': {
+        const info = typeof payload === 'object' ? payload : {};
+        set({ dreamProgress: { ...info, phase: event.replace('dream_', ''), ts: Date.now() } });
+        break;
+      }
+      case 'dream_done': {
+        const info = typeof payload === 'object' ? payload : {};
+        set({ dreamProgress: { ...info, phase: 'done', ts: Date.now() } });
+        setTimeout(() => {
+          const cur = get().dreamProgress;
+          if (cur && cur.phase === 'done') set({ dreamProgress: null });
+        }, 8000);
+        if (info.added || info.updated || info.removed) {
+          state.pushNotification({
+            title: '记忆巩固完成',
+            body: `新增 ${info.added || 0} / 更新 ${info.updated || 0} / 清理 ${info.removed || 0}`,
+          });
+        }
+        break;
+      }
+      case 'dream_error': {
+        const info = typeof payload === 'object' ? payload : {};
+        set({ dreamProgress: { ...info, phase: 'error', ts: Date.now() } });
+        setTimeout(() => {
+          const cur = get().dreamProgress;
+          if (cur && cur.phase === 'error') set({ dreamProgress: null });
+        }, 10000);
+        state.pushNotification({ title: '记忆巩固失败', body: info.error || '未知错误' });
         break;
       }
       case 'desktop_notify': {
@@ -699,11 +794,20 @@ export const createChatSlice = (set, get) => ({
     }
   },
 
-  sendMessage: async ({ message, images = [], useKB = false, files = [] }) => {
+  sendMessage: async ({ message, images = [], useKB = false, files = [], workingDir = '' }) => {
     let sid = get().activeSessionId;
     if (!sid) {
       sid = await get().createSession();
     }
+
+    // 如果当前有正在进行的流式对话，先 abort 再发送新消息
+    if (get().isStreaming && sid) {
+      await api.abortChat(sid).catch(() => {});
+      set({ isStreaming: false, agentState: 'IDLE' });
+      // 等待后端进程清理
+      await new Promise((r) => setTimeout(r, 300));
+    }
+
     let localContent = message || (images.length ? '[图片]' : '');
     if (images.length > 0 || files.length > 0) {
       const previewImages = images.map((img) => `data:${img.mediaType};base64,${img.data}`);
@@ -720,19 +824,23 @@ export const createChatSlice = (set, get) => ({
     set({
       messages: [...get().messages, localUserMsg],
       liveBlocks: [],
+      codingTasks: [],
+      liveDiffs: [],
       isStreaming: true,
       startedAt: Date.now(),
       agentState: 'THINKING',
       suggestedReplies: [],
     });
     try {
-      await api.sendChat({
+      const payload = {
         message,
         sessionId: String(sid),
         useKB,
         images,
         files,
-      });
+      };
+      if (workingDir) payload.workingDir = workingDir;
+      await api.sendChat(payload);
     } catch (e) {
       set({ isStreaming: false, agentState: 'IDLE' });
       get().pushNotification({ title: '发送失败', body: e.message });

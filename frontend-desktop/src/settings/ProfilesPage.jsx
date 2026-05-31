@@ -403,6 +403,7 @@ function ProfileEditor({ providers, profile, onClose, onSaved }) {
   const [baseUrl, setBaseUrl] = useState(profile?.base_url || '');
   const [model, setModel] = useState(profile?.model || '');
   const [token, setToken] = useState('');
+  const [tokenLoading, setTokenLoading] = useState(false);
   const [transformer, setTransformer] = useState(profile?.transformer || '');
   const [showAdvanced, setShowAdvanced] = useState(false);
   const [showToken, setShowToken] = useState(false);
@@ -410,6 +411,16 @@ function ProfileEditor({ providers, profile, onClose, onSaved }) {
   const [fetchingModels, setFetchingModels] = useState(false);
   const [remoteModels, setRemoteModels] = useState(null);
   const pushNotification = useStore((s) => s.pushNotification);
+
+  useEffect(() => {
+    if (!isEdit || !profile?.auth_token_cipher) return;
+    let cancelled = false;
+    setTokenLoading(true);
+    electron.decryptSecret(profile.auth_token_cipher)
+      .then((t) => { if (!cancelled && t) setToken(t); })
+      .finally(() => { if (!cancelled) setTokenLoading(false); });
+    return () => { cancelled = true; };
+  }, [isEdit, profile?.id, profile?.auth_token_cipher]);
 
   const isOpenAI = selectedProvider?.protocol === 'openai';
   const isCustom = selectedProvider?.code === 'custom_openai' || selectedProvider?.code === 'custom_anthropic';
@@ -429,15 +440,24 @@ function ProfileEditor({ providers, profile, onClose, onSaved }) {
     setStep(2);
   };
 
+  const resolveToken = async () => {
+    if (token.trim()) return token.trim();
+    if (profile?.auth_token_cipher) {
+      return (await electron.decryptSecret(profile.auth_token_cipher)) || '';
+    }
+    return '';
+  };
+
   const handleFetchModels = async () => {
-    if (!token.trim()) return pushNotification({ title: '请先填写密钥', body: '' });
+    const effectiveToken = await resolveToken();
+    if (!effectiveToken) return pushNotification({ title: '请先填写密钥', body: '' });
     const url = baseUrl || selectedProvider?.default_base_url || '';
     if (!url) return pushNotification({ title: '缺少 Base URL', body: '' });
     setFetchingModels(true);
     try {
       const r = await api.fetchModels({
         base_url: url,
-        token,
+        token: effectiveToken,
         protocol: selectedProvider?.protocol || 'openai',
       });
       if (r.ok && r.models?.length > 0) {
@@ -552,16 +572,17 @@ function ProfileEditor({ providers, profile, onClose, onSaved }) {
         </div>
 
         {/* 密钥 */}
-        <Field label={isEdit ? '密钥（留空则保留旧值）' : 'API Key'}>
+        <Field label="API Key">
           <div className="relative">
             <Input
               type={showToken ? 'text' : 'password'}
               value={token}
               onChange={(e) => setToken(e.target.value)}
-              placeholder={isEdit ? '••••••••（不修改请留空）' : 'sk-...'}
+              placeholder={tokenLoading ? '正在加载已保存的密钥…' : 'sk-...'}
               autoComplete="off"
               className="pr-9 h-11 text-base"
               autoFocus={!isEdit}
+              disabled={tokenLoading}
             />
             <button
               type="button"
@@ -575,15 +596,25 @@ function ProfileEditor({ providers, profile, onClose, onSaved }) {
             <div className="text-[11px] text-[color:var(--text-faint)] flex items-center gap-1">
               <ShieldCheck size={11} /> Keychain 加密存储
             </div>
-            {selectedProvider?.doc_url && (
-              <button
-                onClick={() => electron.openExternal(selectedProvider.doc_url)}
-                className="inline-flex items-center gap-1 text-[11px] text-[color:var(--accent)] hover:underline"
-              >
-                <ExternalLink size={10} /> 获取密钥
-              </button>
-            )}
+            <div className="flex items-center gap-3">
+              {isEdit && profile?.auth_token_mask && (
+                <span>已保存: {profile.auth_token_mask}</span>
+              )}
+              {selectedProvider?.doc_url && (
+                <button
+                  onClick={() => electron.openExternal(selectedProvider.doc_url)}
+                  className="inline-flex items-center gap-1 text-[11px] text-[color:var(--accent)] hover:underline"
+                >
+                  <ExternalLink size={10} /> 获取密钥
+                </button>
+              )}
+            </div>
           </div>
+          {isEdit && (
+            <div className="mt-1 text-[11px] text-[color:var(--text-faint)]">
+              清空后保存将保留原密钥不变
+            </div>
+          )}
         </Field>
 
         {/* 模型选择 — 始终可见 */}
@@ -598,19 +629,17 @@ function ProfileEditor({ providers, profile, onClose, onSaved }) {
                 placeholder={selectedProvider?.default_model || ''}
               />
             </div>
-            {!isEdit && (
-              <Button
-                size="sm"
-                variant="soft"
-                onClick={handleFetchModels}
-                disabled={fetchingModels || !token.trim()}
-                className="shrink-0 h-[38px]"
-                title="用密钥获取该供应商可用的模型列表"
-              >
-                {fetchingModels ? <Loader2 size={14} className="animate-spin" /> : <Search size={14} />}
-                {fetchingModels ? '获取中' : '获取模型'}
-              </Button>
-            )}
+            <Button
+              size="sm"
+              variant="soft"
+              onClick={handleFetchModels}
+              disabled={fetchingModels || tokenLoading || (!token.trim() && !profile?.auth_token_cipher)}
+              className="shrink-0 h-[38px]"
+              title="用密钥获取该供应商可用的模型列表"
+            >
+              {fetchingModels ? <Loader2 size={14} className="animate-spin" /> : <Search size={14} />}
+              {fetchingModels ? '获取中' : '获取模型'}
+            </Button>
           </div>
           {!model && selectedProvider?.default_model && (
             <div className="mt-1 text-[11px] text-[color:var(--text-faint)]">

@@ -29,10 +29,11 @@ const ScheduledTasksPage = lazyRetry(() => import('../ScheduledTasksPage'));
 const WorkflowPage = lazyRetry(() => import('../WorkflowPage'));
 const NexusPage = lazyRetry(() => import('../nexus/NexusPage'));
 const EvolutionPage = lazyRetry(() => import('../EvolutionPage'));
+const CodeViewPage = lazyRetry(() => import('../code/CodeView').then(m => ({ default: m.CodeView })));
 const LoginPage = lazyRetry(() => import('../LoginPage'));
 import EvolutionProgressPanel from './EvolutionProgressPanel';
 import { cn } from './cn';
-import { MessageSquare, Settings as SettingsIcon, Brain, BookOpen, MessageCircle, Plug, Sparkles, PanelLeftClose, PanelLeftOpen, Clock, Workflow, Globe, LogOut, User, UserPlus, Check, X, Dna } from 'lucide-react';
+import { MessageSquare, Settings as SettingsIcon, Brain, BookOpen, MessageCircle, Plug, Sparkles, PanelLeftClose, PanelLeftOpen, Clock, Workflow, Globe, LogOut, User, UserPlus, Check, X, Dna, Code2, ArrowLeftRight } from 'lucide-react';
 import { api, wsClient } from '../api/client';
 
 const SHORTCUTS = [
@@ -302,7 +303,11 @@ function NexusNotificationOverlay() {
   );
 }
 
+const CodingShellPage = lazyRetry(() => import('../code/CodingShell').then(m => ({ default: m.CodingShell })));
+const ModeSelectorPage = lazyRetry(() => import('../ModeSelector'));
+
 export function AppShell() {
+  const appMode = useStore((s) => s.appMode);
   const view = useStore((s) => s.view);
   const setView = useStore((s) => s.setView);
   const notifications = useStore((s) => s.notifications);
@@ -448,6 +453,28 @@ export function AppShell() {
     );
   }
 
+  // 未选择模式，显示模式选择页
+  if (!appMode) {
+    return (
+      <PageErrorBoundary>
+        <Suspense fallback={<PageFallback />}>
+          <ModeSelectorPage />
+        </Suspense>
+      </PageErrorBoundary>
+    );
+  }
+
+  // Coding 模式：渲染独立的 CodingShell
+  if (appMode === 'coding') {
+    return (
+      <PageErrorBoundary>
+        <Suspense fallback={<PageFallback />}>
+          <CodingShellPage />
+        </Suspense>
+      </PageErrorBoundary>
+    );
+  }
+
   const showSidebar = view === 'chat';
 
   return (
@@ -531,6 +558,16 @@ export function AppShell() {
                 );
               })}
             </div>
+          )}
+          {!isMobile && (
+            <button
+              onClick={() => useStore.getState().setAppMode('coding')}
+              title="切换到 Coding 模式"
+              className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-[11px] font-medium text-[#8b5e3c] bg-[#f5efe8] hover:bg-[#ede5dc] border border-[#e0d5c8] transition mr-1"
+            >
+              <Code2 size={13} />
+              <span>Coding</span>
+            </button>
           )}
           {!isMobile && <RouterPill />}
           {!isMobile && <ModelSwitcher />}

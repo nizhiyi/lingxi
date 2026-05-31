@@ -694,6 +694,15 @@ ipcMain.handle('get-version', () => {
   return app.getVersion();
 });
 
+ipcMain.handle('select-directory', async () => {
+  const result = await dialog.showOpenDialog(mainWindow, {
+    properties: ['openDirectory'],
+    title: '选择项目目录',
+  });
+  if (result.canceled || !result.filePaths.length) return null;
+  return result.filePaths[0];
+});
+
 ipcMain.handle('encrypt-secret', (_e, plain) => encryptSecretBase64(plain));
 ipcMain.handle('decrypt-secret', (_e, cipher) => decryptSecretBase64(cipher));
 ipcMain.handle('is-encryption-available', () => {

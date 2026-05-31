@@ -1,5 +1,5 @@
-import { useEffect, useState } from 'react';
-import { BrainCircuit, Trash2, Plus, AlertTriangle } from 'lucide-react';
+import { useEffect, useState, useCallback } from 'react';
+import { BrainCircuit, Trash2, Plus, AlertTriangle, Moon, Sparkles, Clock, RefreshCw, ChevronDown, ChevronUp } from 'lucide-react';
 import { api } from '../api/client';
 import { useStore } from '../state/useStore';
 import { Button, Input, Card, Modal, Badge } from '../ui/primitives';
@@ -12,9 +12,14 @@ export function MemoryPage() {
   const [newContent, setNewContent] = useState('');
   const [newCategory, setNewCategory] = useState('general');
   const [clearConfirm, setClearConfirm] = useState(false);
+  const [dreamHistory, setDreamHistory] = useState([]);
+  const [dreamExpanded, setDreamExpanded] = useState(false);
+  const [dreamTriggered, setDreamTriggered] = useState(false);
   const agents = useStore((s) => s.agents);
   const activeAgentId = useStore((s) => s.activeAgentId);
   const pushNotification = useStore((s) => s.pushNotification);
+  const dreamProgress = useStore((s) => s.dreamProgress);
+  const dreamRunning = dreamTriggered || (dreamProgress && dreamProgress.phase !== 'done' && dreamProgress.phase !== 'error');
 
   const loadMemories = async () => {
     setLoading(true);
@@ -27,7 +32,45 @@ export function MemoryPage() {
     setLoading(false);
   };
 
-  useEffect(() => { loadMemories(); }, [activeAgentId]);
+  const loadDreamHistory = useCallback(async () => {
+    if (!activeAgentId) return;
+    try {
+      const list = await api.getAgentDreamHistory(activeAgentId);
+      setDreamHistory(list || []);
+    } catch { setDreamHistory([]); }
+  }, [activeAgentId]);
+
+  const checkDreamStatus = useCallback(async () => {
+    try {
+      const s = await api.getDreamStatus();
+      setDreamRunning(s?.running || false);
+    } catch { /* ignore */ }
+  }, []);
+
+  useEffect(() => { loadMemories(); loadDreamHistory(); checkDreamStatus(); }, [activeAgentId]);
+
+  // Dream 完成后刷新数据
+  useEffect(() => {
+    if (dreamProgress?.phase === 'done') {
+      loadMemories();
+      loadDreamHistory();
+      setDreamTriggered(false);
+    } else if (dreamProgress?.phase === 'error') {
+      setDreamTriggered(false);
+    }
+  }, [dreamProgress?.phase]);
+
+  const handleTriggerDream = async () => {
+    if (!activeAgentId || dreamRunning) return;
+    try {
+      setDreamTriggered(true);
+      await api.triggerDream(activeAgentId);
+      pushNotification({ title: '记忆巩固', body: '已开始后台整理记忆...' });
+    } catch (e) {
+      setDreamTriggered(false);
+      pushNotification({ title: '触发失败', body: e.message });
+    }
+  };
 
   const handleAdd = async () => {
     if (!newContent.trim()) return;
@@ -93,6 +136,81 @@ export function MemoryPage() {
           )}
         </div>
       </div>
+
+      {/* Dream 记忆巩固面板 */}
+      {activeAgentId > 0 && (
+        <Card className="mb-5 overflow-hidden">
+          <div className="flex items-center justify-between p-4">
+            <div className="flex items-center gap-3">
+              <div className={cn(
+                'w-9 h-9 rounded-xl flex items-center justify-center',
+                dreamRunning
+                  ? 'bg-purple-500/15 text-purple-500'
+                  : 'bg-[color:var(--accent-soft)] text-[color:var(--accent)]'
+              )}>
+                <Moon size={18} className={dreamRunning ? 'animate-pulse' : ''} />
+              </div>
+              <div>
+                <div className="text-sm font-medium text-[color:var(--text)] flex items-center gap-2">
+                  记忆巩固 (Dream)
+                  {dreamRunning && (
+                    <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-medium bg-purple-500/15 text-purple-500">
+                      <RefreshCw size={10} className="animate-spin" /> 运行中
+                    </span>
+                  )}
+                </div>
+                <p className="text-xs text-[color:var(--text-faint)] mt-0.5">
+                  自动整理、合并和精炼记忆，保持记忆库简洁高效
+                </p>
+              </div>
+            </div>
+            <div className="flex items-center gap-2">
+              <Button
+                variant="outline"
+                onClick={handleTriggerDream}
+                disabled={dreamRunning || memories.length < 3}
+                className="text-xs"
+              >
+                <Sparkles size={13} />
+                {dreamRunning ? '巩固中...' : '立即巩固'}
+              </Button>
+              {dreamHistory.length > 0 && (
+                <button
+                  onClick={() => setDreamExpanded(!dreamExpanded)}
+                  className="p-1.5 rounded-md hover:bg-[color:var(--bg-soft)] text-[color:var(--text-faint)] transition"
+                >
+                  {dreamExpanded ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
+                </button>
+              )}
+            </div>
+          </div>
+
+          {/* Dream 历史 */}
+          {dreamExpanded && dreamHistory.length > 0 && (
+            <div className="border-t border-[color:var(--line)] px-4 py-3 space-y-2 max-h-60 overflow-y-auto">
+              <div className="text-xs text-[color:var(--text-faint)] font-medium mb-2">巩固历史</div>
+              {dreamHistory.map((log) => (
+                <div key={log.id} className="flex items-start gap-2 text-xs">
+                  <div className={cn(
+                    'w-1.5 h-1.5 rounded-full mt-1.5 shrink-0',
+                    log.action === 'create_memory' ? 'bg-green-500' :
+                    log.action === 'update_memory' ? 'bg-blue-500' :
+                    log.action === 'delete_memory' ? 'bg-red-400' :
+                    log.action === 'failed' ? 'bg-red-500' :
+                    'bg-[color:var(--text-faint)]'
+                  )} />
+                  <div className="flex-1 min-w-0">
+                    <span className="text-[color:var(--text-soft)]">{log.summary}</span>
+                  </div>
+                  <span className="text-[color:var(--text-faint)] whitespace-nowrap shrink-0">
+                    {formatRelative(log.created_at)}
+                  </span>
+                </div>
+              ))}
+            </div>
+          )}
+        </Card>
+      )}
 
       {loading ? (
         <div className="text-center py-12 text-sm text-[color:var(--text-faint)]">加载中...</div>
@@ -181,4 +299,19 @@ export function MemoryPage() {
       </Modal>
     </div>
   );
+}
+
+function formatRelative(dateStr) {
+  if (!dateStr) return '';
+  const d = new Date(dateStr);
+  const now = new Date();
+  const diffMs = now - d;
+  const mins = Math.floor(diffMs / 60000);
+  if (mins < 1) return '刚刚';
+  if (mins < 60) return `${mins}分钟前`;
+  const hrs = Math.floor(mins / 60);
+  if (hrs < 24) return `${hrs}小时前`;
+  const days = Math.floor(hrs / 24);
+  if (days < 7) return `${days}天前`;
+  return d.toLocaleDateString('zh-CN');
 }

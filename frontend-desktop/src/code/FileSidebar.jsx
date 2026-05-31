@@ -1,0 +1,228 @@
+import { useState, useEffect, useCallback } from 'react';
+import {
+  Folder, FolderOpen, FileText, FileCode2, Image, ChevronRight, ChevronDown,
+  RefreshCw, Home, X, Search,
+} from 'lucide-react';
+import { cn } from '../ui/cn';
+import { api } from '../api/client';
+
+const EXT_ICONS = {
+  go: FileCode2, js: FileCode2, jsx: FileCode2, ts: FileCode2, tsx: FileCode2,
+  py: FileCode2, rs: FileCode2, java: FileCode2, c: FileCode2, cpp: FileCode2,
+  png: Image, jpg: Image, jpeg: Image, gif: Image, svg: Image, webp: Image,
+};
+
+const EXT_COLORS = {
+  go: 'text-sky-500', js: 'text-yellow-500', jsx: 'text-blue-400',
+  ts: 'text-blue-500', tsx: 'text-blue-400', py: 'text-green-500',
+  rs: 'text-orange-500', java: 'text-red-400', json: 'text-yellow-600',
+  md: 'text-gray-400', css: 'text-purple-400', html: 'text-orange-400',
+};
+
+function getFileIcon(name, isDir) {
+  if (isDir) return Folder;
+  const ext = name.split('.').pop()?.toLowerCase();
+  return EXT_ICONS[ext] || FileText;
+}
+
+function getFileColor(name) {
+  const ext = name.split('.').pop()?.toLowerCase();
+  return EXT_COLORS[ext] || 'text-[#999]';
+}
+
+function TreeNode({ entry, depth, onNavigate, expanded, onToggle, filter }) {
+  const Icon = getFileIcon(entry.name, entry.is_dir);
+  const isOpen = expanded[entry.path];
+  const color = entry.is_dir ? 'text-amber-500' : getFileColor(entry.name);
+
+  if (filter && !entry.is_dir && !entry.name.toLowerCase().includes(filter.toLowerCase())) {
+    return null;
+  }
+
+  const handleDragStart = useCallback((e) => {
+    e.dataTransfer.setData('text/plain', entry.path);
+    e.dataTransfer.setData('application/x-file-path', entry.path);
+    e.dataTransfer.setData('application/x-is-dir', entry.is_dir ? 'true' : 'false');
+    e.dataTransfer.effectAllowed = 'copy';
+  }, [entry]);
+
+  return (
+    <div>
+      <button
+        className={cn(
+          'w-full flex items-center gap-1.5 px-2 py-[4px] text-[12px]',
+          'text-[#666] hover:text-[#333] hover:bg-[#f0ebe6] transition rounded-md',
+        )}
+        style={{ paddingLeft: `${8 + depth * 14}px` }}
+        onClick={() => {
+          if (entry.is_dir) onToggle(entry.path);
+          else onNavigate(entry.path);
+        }}
+        draggable
+        onDragStart={handleDragStart}
+        title={entry.is_dir ? `拖拽引用目录: ${entry.name}` : `拖拽引用: ${entry.name}`}
+      >
+        {entry.is_dir ? (
+          isOpen ? <ChevronDown size={11} className="shrink-0 text-[#aaa]" />
+                 : <ChevronRight size={11} className="shrink-0 text-[#aaa]" />
+        ) : <span className="w-[11px] shrink-0" />}
+        <Icon size={13} className={cn('shrink-0', color)} />
+        <span className="truncate">{entry.name}</span>
+      </button>
+
+      {entry.is_dir && isOpen && entry.children && (
+        <div>
+          {entry.children.map((child) => (
+            <TreeNode
+              key={child.path}
+              entry={child}
+              depth={depth + 1}
+              onNavigate={onNavigate}
+              expanded={expanded}
+              onToggle={onToggle}
+              filter={filter}
+            />
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+export function FileSidebar({ projectPath, onFileSelect, onClose }) {
+  const [tree, setTree] = useState([]);
+  const [expanded, setExpanded] = useState({});
+  const [loading, setLoading] = useState(false);
+  const [filter, setFilter] = useState('');
+
+  const loadDir = useCallback(async (dirPath) => {
+    try {
+      const res = await api.listDirectory(dirPath);
+      return (res.entries || []).sort((a, b) => {
+        if (a.is_dir !== b.is_dir) return a.is_dir ? -1 : 1;
+        return a.name.localeCompare(b.name);
+      });
+    } catch {
+      return [];
+    }
+  }, []);
+
+  useEffect(() => {
+    if (!projectPath) return;
+    setLoading(true);
+    loadDir(projectPath).then((entries) => {
+      setTree(entries);
+      setLoading(false);
+    });
+  }, [projectPath, loadDir]);
+
+  const handleToggle = useCallback(async (path) => {
+    setExpanded((prev) => {
+      const next = { ...prev };
+      if (next[path]) {
+        delete next[path];
+        return next;
+      }
+      next[path] = true;
+      return next;
+    });
+
+    const entry = findEntry(tree, path);
+    if (entry && entry.is_dir && !entry.children) {
+      const children = await loadDir(path);
+      setTree((prev) => updateChildren(prev, path, children));
+    }
+  }, [tree, loadDir]);
+
+  const shortPath = projectPath?.split('/').pop() || 'workspace';
+
+  return (
+    <div className="w-56 border-r border-[#e8e4e0] bg-[#faf8f6] flex flex-col shrink-0 select-none">
+      <div className="flex items-center justify-between px-2 py-2 border-b border-[#e8e4e0]">
+        <div className="flex items-center gap-1.5 text-[11px] text-[#888] font-medium truncate">
+          <FolderOpen size={12} className="text-amber-500" />
+          <span className="truncate">{shortPath}</span>
+        </div>
+        <div className="flex items-center gap-0.5">
+          <button
+            onClick={() => {
+              setLoading(true);
+              loadDir(projectPath).then((entries) => { setTree(entries); setLoading(false); });
+            }}
+            className="p-1 rounded text-[#aaa] hover:text-[#666] transition"
+            title="刷新"
+          >
+            <RefreshCw size={11} className={loading ? 'animate-spin' : ''} />
+          </button>
+          {onClose && (
+            <button onClick={onClose} className="p-1 rounded text-[#aaa] hover:text-[#666] transition" title="关闭">
+              <X size={11} />
+            </button>
+          )}
+        </div>
+      </div>
+
+      <div className="px-2 py-1.5 border-b border-[#e8e4e0]">
+        <div className="flex items-center gap-1.5 px-2 py-1 rounded-md bg-white border border-[#e0dbd5] text-[11px]">
+          <Search size={11} className="text-[#bbb] shrink-0" />
+          <input
+            type="text"
+            value={filter}
+            onChange={(e) => setFilter(e.target.value)}
+            placeholder="搜索文件…"
+            className="flex-1 bg-transparent outline-none text-[#555] placeholder-[#ccc]"
+          />
+        </div>
+      </div>
+
+      <div className="flex-1 overflow-y-auto scrollable py-1">
+        {tree.length === 0 && !loading && (
+          <div className="px-3 py-8 text-[11px] text-[#bbb] text-center">
+            <FolderOpen size={24} className="mx-auto mb-2 text-[#ddd]" />
+            <p>目录为空</p>
+          </div>
+        )}
+        {loading && tree.length === 0 && (
+          <div className="px-3 py-8 text-[11px] text-[#bbb] text-center">
+            <RefreshCw size={14} className="mx-auto mb-2 animate-spin text-[#ccc]" />
+            <p>加载中…</p>
+          </div>
+        )}
+        {tree.map((entry) => (
+          <TreeNode
+            key={entry.path}
+            entry={entry}
+            depth={0}
+            onNavigate={onFileSelect}
+            expanded={expanded}
+            onToggle={handleToggle}
+            filter={filter}
+          />
+        ))}
+      </div>
+
+      <div className="px-2 py-1.5 border-t border-[#e8e4e0] text-[10px] text-[#bbb] text-center">
+        拖拽文件到输入框引用
+      </div>
+    </div>
+  );
+}
+
+function findEntry(entries, path) {
+  for (const e of entries) {
+    if (e.path === path) return e;
+    if (e.children) {
+      const found = findEntry(e.children, path);
+      if (found) return found;
+    }
+  }
+  return null;
+}
+
+function updateChildren(entries, path, children) {
+  return entries.map((e) => {
+    if (e.path === path) return { ...e, children };
+    if (e.children) return { ...e, children: updateChildren(e.children, path, children) };
+    return e;
+  });
+}

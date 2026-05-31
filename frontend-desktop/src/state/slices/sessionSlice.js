@@ -4,24 +4,42 @@ export const createSessionSlice = (set, get) => ({
   sessions: [],
   activeSessionId: null,
   setActiveSession: async (id) => {
-    set({ activeSessionId: id, messages: [], liveBlocks: [] });
+    const isCoding = get().appMode === 'coding';
+    set({
+      activeSessionId: id,
+      messages: [], liveBlocks: [], codingTasks: [], liveDiffs: [],
+      // 清空 Coding 独立状态
+      codingMessages: [], codingLiveBlocks: [],
+      codingIsStreaming: false, codingAgentState: 'IDLE',
+      codingPendingQuestions: [], codingCurrentQuestionIdx: 0,
+      codingAnswers: {}, codingQuestionsSubmitted: false,
+      subAgents: [],
+    });
     if (id) {
       wsClient.subscribe(id);
       const msgs = await api.listMessages(id).catch(() => []);
-      set({ messages: msgs });
+      if (isCoding) {
+        set({ codingMessages: msgs });
+      } else {
+        set({ messages: msgs });
+      }
     }
   },
   refreshSessions: async () => {
     const agentId = get().activeAgentId;
-    const sessions = await api.listSessions(agentId).catch(() => []);
+    const appMode = get().appMode;
+    const mode = appMode === 'coding' ? 'coding' : undefined;
+    const sessions = await api.listSessions(agentId, mode).catch(() => []);
     set({ sessions });
     return sessions;
   },
   createSession: async (titleOrPayload) => {
     const activeAgentId = get().activeAgentId || 0;
+    const appMode = get().appMode;
+    const mode = appMode === 'coding' ? 'coding' : '';
     const payload = typeof titleOrPayload === 'string'
-      ? { title: titleOrPayload || '新对话', agent_id: activeAgentId }
-      : { title: '新对话', agent_id: activeAgentId, ...(titleOrPayload || {}) };
+      ? { title: titleOrPayload || '新对话', agent_id: activeAgentId, mode }
+      : { title: '新对话', agent_id: activeAgentId, mode, ...(titleOrPayload || {}) };
     const r = await api.createSession(payload);
     await get().refreshSessions();
     await get().setActiveSession(r.id);
@@ -59,7 +77,7 @@ export const createSessionSlice = (set, get) => ({
   refreshProfiles: async () => {
     const [providers, profiles] = await Promise.all([
       api.listProviders().catch(() => []),
-      api.listProfiles().catch(() => []),
+      api.listProfiles(true).catch(() => []),
     ]);
     const activeProfile = profiles.find((p) => p.is_active) || null;
     set({ providers, profiles, activeProfile });
@@ -89,7 +107,7 @@ export const createSessionSlice = (set, get) => ({
   },
   setActiveAgent: async (agentId) => {
     localStorage.setItem('lingxi-active-agent', String(agentId));
-    set({ activeAgentId: agentId, activeSessionId: null, messages: [], liveBlocks: [] });
+    set({ activeAgentId: agentId, activeSessionId: null, messages: [], liveBlocks: [], codingTasks: [], liveDiffs: [] });
     const sessions = await get().refreshSessions();
     if (sessions.length > 0) {
       await get().setActiveSession(sessions[0].id);

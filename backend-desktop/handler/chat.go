@@ -291,6 +291,32 @@ App -> User : 返回结果
 
 ---
 
+# 【任务计划 — 编码/操作任务必须输出】
+
+**凡是涉及多步骤编码、文件操作、配置修改、调试排查等任务（≥2 步），你必须在开始工作前先输出一个任务计划 JSON 块。**
+
+格式：
+
+` + "```json" + `
+{"type":"task_plan","tasks":[{"id":"1","content":"描述第一步","status":"pending"},{"id":"2","content":"描述第二步","status":"pending"},{"id":"3","content":"描述第三步","status":"pending"}]}
+` + "```" + `
+
+规则：
+1. **每次多步骤任务开始前必须输出**，让用户能看到工作计划
+2. 每个 task 的 status 初始为 "pending"
+3. **每完成一步，立即输出一个更新后的 task_plan**，将已完成步骤标记为 "completed"，当前进行中的步骤标记为 "in_progress"
+4. content 用简洁的中文描述每步要做什么
+5. 任务数量通常 3-8 个，太多则合并
+6. 所有步骤完成后，输出最终的 task_plan，所有 status 设为 "completed"
+
+示例 — 完成第一步后：
+
+` + "```json" + `
+{"type":"task_plan","tasks":[{"id":"1","content":"读取配置文件","status":"completed"},{"id":"2","content":"修改数据库连接参数","status":"in_progress"},{"id":"3","content":"重启服务验证","status":"pending"}]}
+` + "```" + `
+
+---
+
 # 【绝对禁止清单】
 
 1. ❌ 输出 {"state":"..."} 这类 JSON 状态串到回答里——状态由后端自动推断
@@ -901,11 +927,12 @@ func buildStdinMessage(text string, imagePaths []string) string {
 
 func Chat(c *gin.Context) {
 	var body struct {
-		Message   string         `json:"message"`
-		SessionID string         `json:"sessionId"`
-		UseKB     bool           `json:"useKB"`
-		Images    []imagePayload `json:"images"`
-		Files     []struct {
+		Message    string         `json:"message"`
+		SessionID  string         `json:"sessionId"`
+		UseKB      bool           `json:"useKB"`
+		WorkingDir string         `json:"workingDir"`
+		Images     []imagePayload `json:"images"`
+		Files      []struct {
 			Name    string `json:"name"`
 			Ext     string `json:"ext"`
 			Content string `json:"content"`
@@ -967,7 +994,7 @@ func Chat(c *gin.Context) {
 		updateSessionTitle(sessionID, string(runes))
 	}
 	c.JSON(http.StatusAccepted, gin.H{"status": "accepted", "sessionId": sessionID})
-	go runClaudeWithPaths(sessionID, body.Message, body.UseKB, imagePaths)
+	go runClaudeWithPaths(sessionID, body.Message, body.UseKB, imagePaths, body.WorkingDir)
 }
 
 func BatchChat(c *gin.Context) {
@@ -1555,12 +1582,23 @@ func runClaude(sessionID int64, message string, useKB bool, images []imagePayloa
 		slog.Warn("saveImagesToTmp error", "err", err)
 	}
 	defer cleanupImageFiles(imagePaths)
-	runClaudeWithPaths(sessionID, message, useKB, imagePaths)
+	runClaudeWithPaths(sessionID, message, useKB, imagePaths, "")
 }
 
-func runClaudeWithPaths(sessionID int64, message string, useKB bool, imagePaths []string) {
+func runClaudeWithPaths(sessionID int64, message string, useKB bool, imagePaths []string, workingDir string) {
 	hub := globalHub
 	cfg := config.Get()
+
+	// 终止同一会话中可能还在运行的上一个 claude 进程，避免两个进程同时 --resume 同一 session 导致冲突
+	if prev, ok := activeChats.Load(sessionID); ok {
+		if oldCmd, _ := prev.(*exec.Cmd); oldCmd != nil && oldCmd.Process != nil {
+			slog.Info("killing previous claude process for session", "session", sessionID, "pid", oldCmd.Process.Pid)
+			oldCmd.Process.Kill()
+			// 给一点时间让旧进程退出
+			time.Sleep(200 * time.Millisecond)
+		}
+		activeChats.Delete(sessionID)
+	}
 
 	// 检查挂起任务，注入上下文
 	if taskDesc, missingFields, found := db.GetPendingTask(sessionID); found {
@@ -1599,6 +1637,10 @@ func runClaudeWithPaths(sessionID int64, message string, useKB bool, imagePaths 
 			prompt += "\n\n" + kbHint
 		}
 	}
+	// Coding 模式：注入工作目录上下文
+	if workingDir != "" {
+		prompt += fmt.Sprintf("\n\n# 【当前工作目录】\n\n你当前正在操作的项目目录是：`%s`\n所有文件操作、终端命令、代码搜索都应该在这个目录下进行。不要去其他目录寻找文件。\n如果用户提到相对路径，请基于此目录解析。", workingDir)
+	}
 	if claudeSessionID != "" {
 		args = append(args, "--resume", claudeSessionID)
 		args = append(args, "--system-prompt", prompt)
@@ -1610,6 +1652,20 @@ func runClaudeWithPaths(sessionID int64, message string, useKB bool, imagePaths 
 	cmd := exec.Command(claudeBin, args...)
 	cmd.Stdin = strings.NewReader(buildStdinMessage(message, imagePaths))
 	cmd.Env = buildClaudeEnv(cfg)
+
+	// Coding 模式：设置工作目录，让 AI 在用户选择的项目路径下执行
+	if workingDir != "" {
+		workingDir = expandHome(workingDir)
+		if info, err := os.Stat(workingDir); err == nil && info.IsDir() {
+			cmd.Dir = workingDir
+			slog.Info("claude workingDir set", "dir", workingDir, "session", sessionID)
+		}
+	}
+
+	// Coding 模式：将工作目录上下文注入环境变量，system prompt 可引用
+	if workingDir != "" {
+		cmd.Env = append(cmd.Env, "CODING_WORKING_DIR="+workingDir)
+	}
 
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
@@ -1862,6 +1918,10 @@ func runClaudeWithPaths(sessionID int64, message string, useKB bool, imagePaths 
 			case "content_block_stop":
 				if len(blocks) > 0 {
 					last := &blocks[len(blocks)-1]
+					if last.Type == "text" && last.Text != "" {
+						emitTaskPlanFromText(hub, sessionID, last.Text)
+						emitInteractiveFromText(hub, sessionID, last.Text)
+					}
 					if last.Type == "tool" {
 						// 拦截 AskUserQuestion 类工具：转为前端可渲染的交互式文本块
 						if isAskUserTool(last.Name) {
@@ -1902,29 +1962,41 @@ func runClaudeWithPaths(sessionID int64, message string, useKB bool, imagePaths 
 								})
 								hub.Send(sessionID, "tool_end", string(endPayload))
 							}
-						} else {
-							last.Done = true
-							startedMs := last.Ms
-							elapsed := time.Now().UnixMilli() - startedMs
-							if elapsed < 0 {
-								elapsed = 0
-							}
-							summary := safeSummarizeToolInput(last.Name, last.Input)
-							last.Input = summary
-							last.Ms = elapsed
-							last.Status = "ok"
-							// 推送富 tool_end 事件
-							endPayload, _ := json.Marshal(map[string]any{
-								"done":   true,
-								"name":   last.Name,
-								"label":  last.Label,
-								"input":  summary,
-								"ms":     elapsed,
-								"status": "ok",
-							})
-							hub.Send(sessionID, "tool_end", string(endPayload))
-							hub.Send(sessionID, "agent_state", `{"state":"THINKING"}`)
+					} else {
+						last.Done = true
+						startedMs := last.Ms
+						elapsed := time.Now().UnixMilli() - startedMs
+						if elapsed < 0 {
+							elapsed = 0
 						}
+						fullInput := last.Input
+						summary := safeSummarizeToolInput(last.Name, fullInput)
+
+						// TodoWrite 工具：解析任务列表并推送 task_update 事件
+						if last.Name == "TodoWrite" {
+							emitTaskUpdate(hub, sessionID, fullInput)
+						}
+
+						// 文件修改类工具：推送实时 diff 预览
+						if isFileModifyTool(last.Name) {
+							emitFileDiff(hub, sessionID, last.Name, fullInput, workingDir)
+						}
+
+						last.Input = summary
+						last.Ms = elapsed
+						last.Status = "ok"
+						// 推送富 tool_end 事件
+						endPayload, _ := json.Marshal(map[string]any{
+							"done":   true,
+							"name":   last.Name,
+							"label":  last.Label,
+							"input":  summary,
+							"ms":     elapsed,
+							"status": "ok",
+						})
+						hub.Send(sessionID, "tool_end", string(endPayload))
+						hub.Send(sessionID, "agent_state", `{"state":"THINKING"}`)
+					}
 					}
 				}
 			}
@@ -2022,6 +2094,227 @@ func runClaudeWithPaths(sessionID int64, message string, useKB bool, imagePaths 
 	tryPostChatEvolution(agentID, sessionID, blocks)
 
 	hub.Send(sessionID, "done", "[DONE]")
+}
+
+// emitTaskPlanFromText 检查文本中是否包含 task_plan JSON 块，如果有则推送 task_update 事件
+func emitTaskPlanFromText(hub *Hub, sessionID int64, text string) {
+	type taskItem struct {
+		ID      string `json:"id"`
+		Content string `json:"content"`
+		Status  string `json:"status"`
+	}
+	type taskPlan struct {
+		Type  string     `json:"type"`
+		Tasks []taskItem `json:"tasks"`
+	}
+
+	tryEmit := func(raw string) bool {
+		var obj taskPlan
+		if err := json.Unmarshal([]byte(strings.TrimSpace(raw)), &obj); err != nil {
+			return false
+		}
+		if obj.Type != "task_plan" || len(obj.Tasks) == 0 {
+			return false
+		}
+		payload, _ := json.Marshal(map[string]any{
+			"todos": obj.Tasks,
+			"title": "Tasks",
+		})
+		hub.Send(sessionID, "task_update", string(payload))
+		return true
+	}
+
+	// 1) 匹配 ```json ... ``` 包裹的 JSON
+	re := regexp.MustCompile("(?s)```json\\s*\n(.*?)\n```")
+	matches := re.FindAllStringSubmatch(text, -1)
+	found := false
+	for _, m := range matches {
+		if len(m) >= 2 && tryEmit(m[1]) {
+			found = true
+		}
+	}
+
+	// 2) 如果代码围栏里没找到，通过花括号配对扫描裸 JSON
+	if !found {
+		for i := 0; i < len(text); i++ {
+			if text[i] != '{' {
+				continue
+			}
+			depth := 0
+			for j := i; j < len(text); j++ {
+				if text[j] == '{' {
+					depth++
+				} else if text[j] == '}' {
+					depth--
+					if depth == 0 {
+						candidate := text[i : j+1]
+						if strings.Contains(candidate, `"task_plan"`) {
+							tryEmit(candidate)
+						}
+						i = j
+						break
+					}
+				}
+			}
+		}
+	}
+}
+
+// emitTaskUpdate 解析 TodoWrite 工具的输入并推送 task_update 事件到前端
+func emitTaskUpdate(hub *Hub, sessionID int64, rawInput string) {
+	var parsed struct {
+		Todos []struct {
+			ID      string `json:"id"`
+			Content string `json:"content"`
+			Status  string `json:"status"`
+		} `json:"todos"`
+	}
+	if err := json.Unmarshal([]byte(rawInput), &parsed); err != nil {
+		return
+	}
+	if len(parsed.Todos) == 0 {
+		return
+	}
+	payload, _ := json.Marshal(map[string]any{
+		"todos": parsed.Todos,
+		"title": "Tasks",
+	})
+	hub.Send(sessionID, "task_update", string(payload))
+}
+
+// isFileModifyTool 判断工具是否修改文件
+func isFileModifyTool(name string) bool {
+	switch name {
+	case "Write", "Edit", "MultiEdit":
+		return true
+	}
+	return false
+}
+
+// emitFileDiff 在文件修改工具完成后计算 diff 并推送给前端
+func emitFileDiff(hub *Hub, sessionID int64, toolName, toolInput, workingDir string) {
+	var obj map[string]any
+	if err := json.Unmarshal([]byte(toolInput), &obj); err != nil {
+		return
+	}
+	filePath := ""
+	for _, k := range []string{"file_path", "path"} {
+		if v, ok := obj[k]; ok {
+			if s, ok := v.(string); ok && s != "" {
+				filePath = s
+				break
+			}
+		}
+	}
+	if filePath == "" {
+		return
+	}
+
+	dir := workingDir
+	if dir == "" {
+		dir = "."
+	}
+
+	isNew := false
+	// 尝试获取 git diff
+	cmd := exec.Command("git", "diff", "--no-color", "--", filePath)
+	cmd.Dir = dir
+	out, err := cmd.Output()
+	diff := strings.TrimSpace(string(out))
+
+	if err != nil || diff == "" {
+		// 可能是新增文件（未跟踪），尝试 git diff --no-index /dev/null
+		cmd2 := exec.Command("git", "diff", "--no-color", "--no-index", "/dev/null", filePath)
+		cmd2.Dir = dir
+		out2, _ := cmd2.Output()
+		diff = strings.TrimSpace(string(out2))
+		if diff != "" {
+			isNew = true
+		}
+	}
+
+	if diff == "" {
+		return
+	}
+
+	// 统计增删行数
+	addedLines := 0
+	removedLines := 0
+	for _, line := range strings.Split(diff, "\n") {
+		if len(line) > 0 && line[0] == '+' && !strings.HasPrefix(line, "+++") {
+			addedLines++
+		} else if len(line) > 0 && line[0] == '-' && !strings.HasPrefix(line, "---") {
+			removedLines++
+		}
+	}
+
+	payload, _ := json.Marshal(map[string]any{
+		"file":    filePath,
+		"diff":    diff,
+		"tool":    toolName,
+		"is_new":  isNew,
+		"added":   addedLines,
+		"removed": removedLines,
+	})
+	hub.Send(sessionID, "file_diff", string(payload))
+}
+
+// emitInteractiveFromText 检查文本中是否包含 choice/input JSON 块，如有则推送 ask_question 事件
+func emitInteractiveFromText(hub *Hub, sessionID int64, text string) {
+	type genericJSON struct {
+		Type string `json:"type"`
+	}
+
+	tryEmit := func(raw string) bool {
+		var g genericJSON
+		if err := json.Unmarshal([]byte(strings.TrimSpace(raw)), &g); err != nil {
+			return false
+		}
+		if g.Type != "choice" && g.Type != "input" {
+			return false
+		}
+		var parsed map[string]any
+		if err := json.Unmarshal([]byte(strings.TrimSpace(raw)), &parsed); err != nil {
+			return false
+		}
+		payload, _ := json.Marshal(parsed)
+		hub.Send(sessionID, "ask_question", string(payload))
+		return true
+	}
+
+	// 1) ```json ... ``` 包裹
+	re := regexp.MustCompile("(?s)```json\\s*\n(.*?)\n```")
+	matches := re.FindAllStringSubmatch(text, -1)
+	for _, m := range matches {
+		if len(m) >= 2 {
+			tryEmit(m[1])
+		}
+	}
+
+	// 2) 裸 JSON — 通过扫描花括号配对来提取完整 JSON 对象
+	for i := 0; i < len(text); i++ {
+		if text[i] != '{' {
+			continue
+		}
+		depth := 0
+		for j := i; j < len(text); j++ {
+			if text[j] == '{' {
+				depth++
+			} else if text[j] == '}' {
+				depth--
+				if depth == 0 {
+					candidate := text[i : j+1]
+					if strings.Contains(candidate, `"type"`) &&
+						(strings.Contains(candidate, `"choice"`) || strings.Contains(candidate, `"input"`)) {
+						if tryEmit(candidate) {
+							i = j
+						}
+					}
+					break
+				}
+			}
+		}
+	}
 }
 
 // tryPostChatEvolution checks multiple conditions to trigger evolution analysis:

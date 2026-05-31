@@ -5,6 +5,8 @@ import { createUISlice } from './slices/uiSlice';
 import { createSessionSlice } from './slices/sessionSlice';
 import { createChatSlice } from './slices/chatSlice';
 import { createNexusSlice } from './slices/nexusSlice';
+import { createCodingSlice } from './slices/codingSlice';
+import { createCodingChatSlice } from './slices/codingChatSlice';
 
 export const useStore = create((set, get, store) => ({
   ...createAuthSlice(set, get, store),
@@ -12,14 +14,30 @@ export const useStore = create((set, get, store) => ({
   ...createSessionSlice(set, get, store),
   ...createChatSlice(set, get, store),
   ...createNexusSlice(set, get, store),
+  ...createCodingSlice(set, get, store),
+  ...createCodingChatSlice(set, get, store),
 }));
 
+let _storeInitialized = false;
+let _wsUnsubscribe = null;
+
 export function initStore() {
-  const { theme, handleWSEvent, checkAuth } = useStore.getState();
+  const { theme, checkAuth } = useStore.getState();
   document.documentElement.setAttribute('data-theme', theme);
 
-  wsClient.connect();
-  wsClient.on(handleWSEvent);
+  // 防止重复注册 WS handler（AppShell 和 CodingShell 都会调用 initStore）
+  if (!_storeInitialized) {
+    _storeInitialized = true;
+    wsClient.connect();
+    _wsUnsubscribe = wsClient.on((msg) => {
+      const state = useStore.getState();
+      if (state.appMode === 'coding') {
+        state.codingHandleWSEvent(msg);
+      } else {
+        state.handleWSEvent(msg);
+      }
+    });
+  }
 
   // Screen Agent 紧急中止监听
   if (window.electronAPI?.screenAgent?.onEmergencyAbort) {

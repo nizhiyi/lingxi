@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"os/exec"
 	"strconv"
 	"strings"
 
@@ -13,24 +14,32 @@ import (
 	"lingxi-agent/model"
 )
 
-// ListSessions GET /api/sessions?agent_id=N
+// ListSessions GET /api/sessions?agent_id=N&mode=coding
 func ListSessions(c *gin.Context) {
 	agentIDStr := c.Query("agent_id")
+	modeFilter := c.Query("mode")
+
+	modeVal := ""
+	if modeFilter != "" {
+		modeVal = modeFilter
+	}
+
 	var (
 		rows *sql.Rows
 		err  error
 	)
+
 	if agentIDStr != "" {
 		agentID, _ := strconv.ParseInt(agentIDStr, 10, 64)
 		rows, err = db.DB.Query(`
 			SELECT id, title, message_count, COALESCE(agent_id,0), COALESCE(pinned,0), COALESCE(folder,''), COALESCE(permission_mode,'trust'), created_at, updated_at
-			FROM sessions WHERE COALESCE(agent_id,0)=? AND COALESCE(is_a2a,0)=0 ORDER BY COALESCE(pinned,0) DESC, updated_at DESC
-		`, agentID)
+			FROM sessions WHERE COALESCE(agent_id,0)=? AND COALESCE(is_a2a,0)=0 AND COALESCE(mode,'')=? ORDER BY COALESCE(pinned,0) DESC, updated_at DESC
+		`, agentID, modeVal)
 	} else {
 		rows, err = db.DB.Query(`
 			SELECT id, title, message_count, COALESCE(agent_id,0), COALESCE(pinned,0), COALESCE(folder,''), COALESCE(permission_mode,'trust'), created_at, updated_at
-			FROM sessions WHERE COALESCE(is_a2a,0)=0 ORDER BY COALESCE(pinned,0) DESC, updated_at DESC
-		`)
+			FROM sessions WHERE COALESCE(is_a2a,0)=0 AND COALESCE(mode,'')=? ORDER BY COALESCE(pinned,0) DESC, updated_at DESC
+		`, modeVal)
 	}
 	if err != nil {
 		slog.Warn("list error", "err", err)
@@ -56,6 +65,7 @@ func CreateSession(c *gin.Context) {
 		Title          string `json:"title"`
 		AgentID        int64  `json:"agent_id"`
 		PermissionMode string `json:"permission_mode"`
+		Mode           string `json:"mode"`
 	}
 	_ = c.ShouldBindJSON(&body)
 	if body.Title == "" {
@@ -65,14 +75,14 @@ func CreateSession(c *gin.Context) {
 		body.PermissionMode = "trust"
 	}
 
-	res, err := db.DB.Exec(`INSERT INTO sessions (title, agent_id, permission_mode) VALUES (?,?,?)`, body.Title, body.AgentID, body.PermissionMode)
+	res, err := db.DB.Exec(`INSERT INTO sessions (title, agent_id, permission_mode, mode) VALUES (?,?,?,?)`, body.Title, body.AgentID, body.PermissionMode, body.Mode)
 	if err != nil {
 		slog.Warn("create error", "err", err)
 		c.Status(http.StatusInternalServerError)
 		return
 	}
 	id, _ := res.LastInsertId()
-	c.JSON(http.StatusOK, gin.H{"id": id, "title": body.Title, "agent_id": body.AgentID, "permission_mode": body.PermissionMode})
+	c.JSON(http.StatusOK, gin.H{"id": id, "title": body.Title, "agent_id": body.AgentID, "permission_mode": body.PermissionMode, "mode": body.Mode})
 }
 
 // UpdateSession PATCH /api/sessions/:id
@@ -423,4 +433,82 @@ func buildConversationContext(sessionID, aroundMsgID int64) string {
 		parts = append(parts, fmt.Sprintf("[%s]: %s", role, content))
 	}
 	return strings.Join(parts, "\n\n")
+}
+
+// RestoreSession POST /api/sessions/:id/restore
+// 回滚到指定消息之前：删除该消息及之后的所有消息 + 重置 claude_session_id + 可选 git checkout 还原代码
+func RestoreSession(c *gin.Context) {
+	sessionID, err := strconv.ParseInt(c.Param("id"), 10, 64)
+	if err != nil {
+		c.Status(http.StatusBadRequest)
+		return
+	}
+	var body struct {
+		MessageID  int64  `json:"messageId"`
+		WorkingDir string `json:"workingDir"`
+		RevertCode bool   `json:"revertCode"`
+	}
+	if err := c.ShouldBindJSON(&body); err != nil || body.MessageID <= 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "需要 messageId"})
+		return
+	}
+
+	// 1. 删除目标消息及之后的所有消息
+	res, err := db.DB.Exec(`DELETE FROM messages WHERE session_id=? AND id>=?`, sessionID, body.MessageID)
+	if err != nil {
+		slog.Warn("restore: delete messages error", "err", err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "删除消息失败"})
+		return
+	}
+	deleted, _ := res.RowsAffected()
+
+	// 2. 更新消息计数
+	var count int
+	_ = db.DB.QueryRow(`SELECT COUNT(1) FROM messages WHERE session_id=?`, sessionID).Scan(&count)
+	_, _ = db.DB.Exec(`UPDATE sessions SET message_count=?, updated_at=CURRENT_TIMESTAMP WHERE id=?`, count, sessionID)
+
+	// 3. 重置 claude_session_id（回滚后需要创建新的 claude 会话）
+	_, _ = db.DB.Exec(`UPDATE sessions SET claude_session_id='' WHERE id=?`, sessionID)
+
+	// 4. 如果要求还原代码且有工作目录
+	var revertResult string
+	if body.RevertCode && body.WorkingDir != "" {
+		revertResult = revertGitChanges(body.WorkingDir)
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"ok":           true,
+		"deleted":      deleted,
+		"remaining":    count,
+		"revertResult": revertResult,
+	})
+}
+
+// revertGitChanges 在工作目录中还原所有未提交的代码变更
+func revertGitChanges(workingDir string) string {
+	dir := expandHome(workingDir)
+
+	// git checkout -- . (还原已跟踪文件的修改)
+	cmd1 := exec.Command("git", "checkout", "--", ".")
+	cmd1.Dir = dir
+	out1, err1 := cmd1.CombinedOutput()
+
+	// git clean -fd (删除未跟踪的新文件)
+	cmd2 := exec.Command("git", "clean", "-fd")
+	cmd2.Dir = dir
+	out2, err2 := cmd2.CombinedOutput()
+
+	result := ""
+	if err1 != nil {
+		result += "checkout error: " + string(out1) + "; "
+	} else {
+		result += "checkout ok; "
+	}
+	if err2 != nil {
+		result += "clean error: " + string(out2)
+	} else {
+		result += "clean ok"
+	}
+	slog.Info("revertGitChanges", "dir", dir, "result", result)
+	return result
 }
