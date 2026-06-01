@@ -57,3 +57,4 @@ frontend-mobile/dist/
 # Embedded git repos
 ai-config/skills/dot-skill/
 cc-haha/
+claude-agent-sdk-typescript/
