@@ -564,6 +564,7 @@ stdio / SSE / HTTP
 实现一人公司
 
 
+<img src="images/screenshots/agents-factory.png" alt="工作流" width="300" />
 <img src="images/screenshots/agents.png" alt="工作流" width="300" />
 
 </td>
