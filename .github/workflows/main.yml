@@ -2,45 +2,42 @@ name: 编译 Windows 客户端
 
 on:
   workflow_dispatch:
-  push:
-    branches: [ "main", "master" ]
 
 jobs:
   build-windows:
     runs-on: windows-latest
     steps:
-      # 1. 检出代码，直接放在工作区根目录
       - name: 检出代码
         uses: actions/checkout@v4
         with:
           path: .
 
-      # 2. 安装 Node.js
       - name: 安装 Node.js
         uses: actions/setup-node@v4
         with:
           node-version: '22'
 
-      # 3. 安装 Go
       - name: 安装 Go
         uses: actions/setup-go@v5
         with:
           go-version: '1.24'
 
-      # 4. 编译 Windows 客户端（关键！没有 cd lingxi）
+      # ⚠️ 核心修复：修改 build-desktop.sh 中的路径逻辑
+      - name: 修复 build-desktop.sh 路径错误
+        run: |
+          sed -i 's|ELECTRON_DIR=$(dirname "$(realpath "$0")")/electron|ELECTRON_DIR="./electron"|g' build-desktop.sh
+          cat build-desktop.sh | grep ELECTRON_DIR
+
+      # ✅ 现在可以放心构建
       - name: 编译 Windows 客户端
         run: |
-          # 进入后端目录刷新 go mod（仍然有必要的cd，但不再cd lingxi）
           cd backend-desktop
           go mod tidy
           cd ..
-
-          # 由于源码直接就在当前目录，直接执行构建脚本
           chmod +x ./build-desktop.sh
           ./build-desktop.sh win
         shell: bash
 
-      # 5. 上传生成的 .exe 文件
       - name: 上传构建产物
         uses: actions/upload-artifact@v4
         with:
