@@ -10,7 +10,7 @@ jobs:
       - name: 检出代码
         uses: actions/checkout@v4
         with:
-          path: .
+          path: . # 确保代码在 D:\a\lingxi\lingxi
 
       - name: 安装 Node.js
         uses: actions/setup-node@v4
@@ -22,27 +22,34 @@ jobs:
         with:
           go-version: '1.24'
 
-      # ✅ 关键修复：直接手动构建，绕过有问题的 build-desktop.sh
+      # 步骤 1：构建后端
       - name: 构建后端
         run: |
           cd backend-desktop
           go mod tidy
           go build -o ../backend-desktop.exe
         shell: bash
+        # 此时目录停留在 backend-desktop，但 Go 生成的文件在上级目录
 
+      # 步骤 2：构建前端
       - name: 构建前端
         run: |
           cd frontend-desktop
           npm install
           npm run build
         shell: bash
+        # 此时目录停留在 frontend-desktop
 
+      # ✅ 步骤 3：构建 Windows 客户端 (Electron) - 已修复
       - name: 构建 Windows 客户端 (Electron)
         run: |
-          # 回到根目录
-          cd ..
-          # 安装 root 依赖 (包括 electron-builder)
+          # 不要写 cd ..，因为此时目录仍然是 D:\a\lingxi\lingxi
+          # 先回到项目根目录，确保 package.json 能被找到
+          cd D:/a/lingxi/lingxi
+          
+          # 安装根目录依赖 (包含 electron-builder)
           npm install
+          
           # 执行构建 Windows 安装包
           npm run dist:win
         shell: bash
