@@ -11,6 +11,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           path: .
+          fetch-depth: 0  # 改为 0 以拉取全部分支历史，方便恢复文件
 
       - name: 安装 Node.js
         uses: actions/setup-node@v4
@@ -22,23 +23,17 @@ jobs:
         with:
           go-version: '1.24'
 
-      - name: 查看目录结构
+      # 🆕 新增：强制恢复缺失的文件
+      - name: 强制恢复缺失的 electron/package.json
         run: |
-          echo "=== 当前目录 ==="
-          pwd
-          echo "=== 目录树 ==="
-          ls -R
-          echo "=== 查找所有 package.json ==="
-          find . -name "package.json" -print
+          git fetch origin main --depth=1
+          git checkout origin/main -- electron/package.json
+          echo "======== 检查恢复的文件 ========"
+          ls -l electron/package.json
+          echo "======== 内容开头 ========"
+          head -n 10 electron/package.json
         shell: bash
 
-      # ⚠️ 核心修复：修改 build-desktop.sh 中的路径逻辑
-      - name: 修复 build-desktop.sh 路径错误
-        run: |
-          sed -i 's|ELECTRON_DIR=$(dirname "$(realpath "$0")")/electron|ELECTRON_DIR="./electron"|g' build-desktop.sh
-          cat build-desktop.sh | grep ELECTRON_DIR
-
-      # ✅ 现在可以放心构建
       - name: 编译 Windows 客户端
         run: |
           cd backend-desktop
