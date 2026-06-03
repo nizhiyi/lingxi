@@ -26,13 +26,6 @@ jobs:
         with:
           go-version: '1.24'
 
-      # 4. 安装 macOS 上编译 Windows 所需的交叉编译工具
-      - name: 安装跨平台编译依赖 (Wine, Mingw-w64)
-        run: |
-          brew install wine mingw-w64
-          # wine 用于 Electron-builder 生成 NSIS/便携版安装包
-          # mingw-w64 用于 Go 的 CGO 交叉编译（如果有用到 CGO）
-
       # 5. 执行构建脚本
       - name: 执行 Windows 版构建脚本
         env:
