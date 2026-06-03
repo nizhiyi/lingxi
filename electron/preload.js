@@ -4,6 +4,7 @@ const { contextBridge, ipcRenderer } = require('electron');
 contextBridge.exposeInMainWorld('electronAPI', {
   openExternal: (url) => ipcRenderer.invoke('open-external', url),
   getVersion: () => ipcRenderer.invoke('get-version'),
+  getLocalIP: () => ipcRenderer.invoke('get-local-ip'),
 
   // ─── AKSK 加密 / 解密（safeStorage，macOS 走 Keychain）──────
   encryptSecret: (plain) => ipcRenderer.invoke('encrypt-secret', plain),

@@ -909,6 +909,12 @@ xattr -cr "/Applications/灵犀.app"
 - **DrawerPanel 弹窗布局修复**：从右侧 flex 分栏改为 `fixed` 全屏居中弹窗（dimmed backdrop + 960px + Escape + 最大化），解决文件预览/Diff 审查布局错乱
 - **DrawerPanel 移除 codingView 限制**：弹窗模式在任何子视图下都可打开
 
+### Coding View 移动端增强（v2026-06 Phase 21）
+- **Agent 选择器**：ComposerV2 工具栏新增 Agent Picker 下拉菜单，支持从灵犀主模式智能体工厂选择任意智能体进行编程对话
+- **移动端工作目录切换**：手机端顶栏项目名称可点击切换工作目录（DirectoryBrowserModal 浏览桌面端目录），侧边抽屉也增加项目目录切换入口
+- **移动端发送/停止按钮优化**：增加最小宽度 + 移动端增大 padding + 右侧增加间距，不再贴边难按
+- **移动端自动进入 Coding View**：非 Electron 环境（H5/手机端）窗口 < 768px 时自动 `appMode = 'coding'`，跳过模式选择页
+
 ### 纯 Go 协议转换代理（v2026-05 Phase 3）
 - **替代 LiteLLM Bridge**：`backend-desktop/proxy/` 纯 Go 实现，启动零延迟、无 Python 依赖
 - **完整协议转换**：Anthropic `/v1/messages` ↔ OpenAI `/v1/chat/completions`（流式 + 非流式 + Tool use + 思考链 + 多模态）

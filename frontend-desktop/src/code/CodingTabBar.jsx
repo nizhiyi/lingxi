@@ -25,7 +25,7 @@ export function CodingTabBar() {
   }, [deleteSession]);
 
   return (
-    <div className="h-9 flex items-center bg-[var(--coding-surface)] border-b border-[var(--coding-border)] shrink-0 select-none app-drag overflow-hidden">
+    <div className="h-10 flex items-center bg-[var(--coding-surface)] border-b border-[var(--coding-border)] shrink-0 select-none app-drag overflow-hidden">
       <div className="flex items-center h-full overflow-x-auto no-scrollbar app-no-drag">
         {codingView === 'settings' && (
           <div className={cn(
@@ -82,7 +82,7 @@ export function CodingTabBar() {
           );
         })}
       </div>
-      <div className="flex-1 app-drag" />
+      <div className="flex-1 min-w-[80px] app-drag" />
       <div className="flex items-center gap-1 pr-2 app-no-drag shrink-0">
         <button
           onClick={handleNew}

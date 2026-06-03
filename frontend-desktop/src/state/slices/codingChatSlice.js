@@ -515,9 +515,12 @@ export const createCodingChatSlice = (set, get) => ({
       const parsed = typeof q === 'string' ? (() => { try { return JSON.parse(q); } catch { return q; } })() : q;
       const qText = parsed?.title || parsed?.question || parsed?.prompt || `Question ${i + 1}`;
       const qId = parsed?.id || `q_${i}`;
+      const alt = `q_${i}`;
       const opts = parsed?.options || [];
-      const ans = answers[qId] || '';
-      return { question: qText, answer: ans, options: opts };
+      const rawAns = answers[qId] || answers[alt] || '';
+      const matchedOpt = opts.find(o => (o.id || o.value || String(opts.indexOf(o))) === rawAns);
+      const ansText = matchedOpt ? (matchedOpt.label || matchedOpt.text || rawAns) : rawAns;
+      return { question: qText, answer: ansText, options: opts };
     });
     if (qaItems.length > 0) {
       const qaMsg = {
@@ -535,18 +538,22 @@ export const createCodingChatSlice = (set, get) => ({
     try {
       if (permissionId) {
         // AskUserQuestion 走 permission-response 通道（阻塞式）
+        const structuredQAPerm = JSON.stringify({ type: 'ask_question_reply', items: qaItems });
         await api.submitCodingPermissionResponse({
           sessionId: String(sid),
           permissionId,
           behavior: 'allow',
           updatedInput: { answers },
+          structuredQA: structuredQAPerm,
         });
       } else {
         // 兼容旧的非阻塞流程
+        const structuredQA = JSON.stringify({ type: 'ask_question_reply', items: qaItems });
         await api.submitCodingAnswerBatch({
           sessionId: String(sid),
           answers,
           workingDir,
+          structuredQA,
         });
       }
       set({

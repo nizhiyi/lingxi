@@ -784,3 +784,9 @@ PORT=3099 DB_PATH=/tmp/lingxi-instance2/smart-agent.db FRONTEND_DIST=../frontend
 - [x] **会话切换流式进度保留**：`setActiveSession` 和 `setAppMode` 在切换前检测正在流式输出的 `codingLiveBlocks`，自动合并为 assistant 消息保留进度，避免切换后聊天记录消失
 - [x] **DrawerPanel 弹窗布局修复**：`DrawerPanel` 从右侧 flex 分栏彻底改为 `fixed` 全屏居中弹窗叠加层（dimmed backdrop + 960px max-width + Escape 关闭 + scale 动画 + 最大化切换），解决点击文件预览/Diff审查时布局错乱的问题
 - [x] **DrawerPanel 移除 codingView 限制**：弹窗模式不再要求 `codingView === 'chat'` 才能显示，在任何子视图下都可打开文件预览和 Diff 审查
+
+### Coding View 移动端增强（v2026-06 Phase 21）
+- [x] **Agent 选择器**：ComposerV2 工具栏新增 Agent Picker 下拉菜单，支持从灵犀主模式智能体工厂选择任意智能体进行编程对话
+- [x] **移动端工作目录切换**：手机端（H5 远程模式）移动端顶栏项目名称可点击切换工作目录（DirectoryBrowserModal 弹窗浏览桌面端目录系统），侧边抽屉也增加项目目录切换入口
+- [x] **移动端发送/停止按钮优化**：ComposerV2 发送/停止按钮增加最小宽度 60px + 移动端增大 padding（px-4 py-2）+ 右侧增加 ml-2 间距，不再贴边难按
+- [x] **移动端自动进入 Coding View**：非 Electron 环境（H5 浏览器/手机端）检测窗口宽度 < 768px 时自动设置 `appMode = 'coding'`，跳过 ModeSelector 模式选择页

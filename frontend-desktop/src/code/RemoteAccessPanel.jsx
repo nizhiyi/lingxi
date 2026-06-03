@@ -18,6 +18,15 @@ export function RemoteAccessPanel() {
   const [connectedDevice, setConnectedDevice] = useState(null);
   const [copied, setCopied] = useState(false);
   const [expiresIn, setExpiresIn] = useState(0);
+  const [localIP, setLocalIP] = useState('');
+
+  useEffect(() => {
+    if (window.electronAPI?.getLocalIP) {
+      window.electronAPI.getLocalIP().then(ip => setLocalIP(ip || '127.0.0.1'));
+    } else {
+      setLocalIP(window.location.hostname || '127.0.0.1');
+    }
+  }, []);
 
   const handleGenerate = useCallback(() => {
     const code = generatePairingCode();
@@ -145,7 +154,7 @@ export function RemoteAccessPanel() {
                 </span>
               </div>
               <p className="text-[10px] text-[var(--text-faint)] leading-relaxed">
-                访问 <span className="font-mono text-[var(--accent)]">http://本机IP:3001/h5</span> 并输入上方配对码
+                访问 <span className="font-mono text-[var(--accent)]">http://{localIP}:3001/h5</span> 并输入上方配对码
               </p>
             </>
           )}

@@ -15,12 +15,27 @@ export function AgentsWindow() {
   const agentState = useStore((s) => s.codingAgentState);
   const isStreaming = useStore((s) => s.codingIsStreaming);
   const codingTasks = useStore((s) => s.codingTasks);
+  const liveBlocks = useStore((s) => s.codingLiveBlocks);
   const [collapsed, setCollapsed] = useState(false);
+
+  const enrichedAgents = useMemo(() => {
+    if (subAgents.length === 0) return subAgents;
+    const recentTools = liveBlocks
+      .filter(b => b.type === 'tool' && !b.parent_tool_use_id)
+      .slice(-5)
+      .map(b => ({ name: b.name || '', ts: b.startedAt || Date.now(), done: !!b.done, endedAt: b.endedAt }));
+    return subAgents.map(a => {
+      if (a.status === 'working' && (!a.toolActivities || a.toolActivities.length === 0) && recentTools.length > 0) {
+        return { ...a, toolActivities: recentTools };
+      }
+      return a;
+    });
+  }, [subAgents, liveBlocks]);
 
   const workingCount = subAgents.filter(a => a.status === 'working').length;
   const doneCount = subAgents.filter(a => a.status === 'done').length;
   const errorCount = subAgents.filter(a => a.status === 'error').length;
-  const agentTree = useMemo(() => buildAgentTree(subAgents), [subAgents]);
+  const agentTree = useMemo(() => buildAgentTree(enrichedAgents), [enrichedAgents]);
 
   const hasContent = subAgents.length > 0 || isStreaming;
   if (!hasContent) return null;
@@ -226,6 +241,13 @@ function SubAgentCard({ agent, depth, isLast }) {
             <div className="text-[12px] font-medium text-[var(--text)] truncate">
               {agent.description || `Sub-agent ${agent.id}`}
             </div>
+            {/* Current activity hint */}
+            {agent.status === 'working' && agent.last_tool_name && !agent.task_subject && (
+              <div className="flex items-center gap-1 mt-0.5">
+                <Wrench size={9} className="text-[var(--accent)]/70" />
+                <span className="text-[10px] text-[var(--accent)]/70 truncate font-mono">{agent.last_tool_name}</span>
+              </div>
+            )}
             {/* Task assignment info */}
             {agent.task_subject && (
               <div className="flex items-center gap-1 mt-0.5">

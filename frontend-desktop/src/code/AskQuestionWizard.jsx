@@ -38,7 +38,8 @@ export function AskQuestionWizard() {
 
   const allAnswered = total > 0 && parsedQuestions.every((q, i) => {
     const qId = q.id || `q_${i}`;
-    return answers[qId] && answers[qId].trim();
+    const alt = `q_${i}`;
+    return (answers[qId] && answers[qId].trim()) || (answers[alt] && answers[alt].trim());
   });
 
   const currentQ = total > 0 ? parsedQuestions[currentIdx] : null;
@@ -134,7 +135,7 @@ export function AskQuestionWizard() {
           <div className="flex gap-1 mt-1.5">
             {parsedQuestions.map((_, i) => {
               const qId = (parsedQuestions[i]?.id) || `q_${i}`;
-              const answered = !!answers[qId];
+              const answered = !!(answers[qId] || answers[`q_${i}`]);
               return (
                 <motion.div
                   key={i}
@@ -327,9 +328,10 @@ function SummaryView({ questions, answers, onBack, onSubmit, allAnswered }) {
       <div className="space-y-2 mb-4 max-h-[200px] overflow-auto scrollable">
         {questions.map((q, i) => {
           const qId = q.id || `q_${i}`;
+          const alt = `q_${i}`;
           const rawQTitle = q.title || q.question || q.prompt || `Question ${i + 1}`;
           const qTitle = typeof rawQTitle === 'string' ? rawQTitle : JSON.stringify(rawQTitle);
-          const ans = answers[qId] || '';
+          const ans = answers[qId] || answers[alt] || '';
           return (
             <motion.div
               key={qId}

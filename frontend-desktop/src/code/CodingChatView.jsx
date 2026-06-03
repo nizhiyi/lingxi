@@ -87,7 +87,7 @@ export function CodingChatView({ projectPath, onChangeProject }) {
   }
 
   return (
-    <div className="flex-1 flex flex-col min-h-0 relative">
+    <div className="flex-1 flex flex-col min-h-0 overflow-hidden relative">
       <AnimatePresence>
         {codingTasks.length > 0 && (
           <StickyTaskBar tasks={codingTasks} />
@@ -101,7 +101,7 @@ export function CodingChatView({ projectPath, onChangeProject }) {
             initial={{ opacity: 0, height: 0 }}
             animate={{ opacity: 1, height: 'auto' }}
             exit={{ opacity: 0, height: 0 }}
-            className="shrink-0 border-b border-[var(--coding-border)]/50 bg-[var(--coding-surface)]/95 backdrop-blur-md max-w-4xl mx-auto w-full px-3 sm:px-6"
+            className="shrink-0 border-b border-[var(--coding-border)]/50 bg-[var(--coding-surface)]/95 backdrop-blur-md max-w-4xl mx-auto w-full px-3 sm:px-6 max-h-[30vh] overflow-y-auto scrollable"
           >
             <AgentsWindow />
           </motion.div>
@@ -1006,19 +1006,19 @@ function CodeBlock({ code, language }) {
   }, [code]);
 
   return (
-    <div className="relative group my-3 rounded-xl border border-[var(--coding-border)]/60 overflow-hidden shadow-sm">
-      <div className="flex items-center justify-between px-3 py-1.5 bg-[var(--coding-surface-raised)]/80 border-b border-[var(--coding-border)]/50">
-        <span className="text-[11px] text-[var(--text-faint)] font-mono">{language}</span>
-        <button onClick={handleCopy} className="p-1 rounded-md text-[var(--text-faint)] hover:text-[var(--text-soft)] hover:bg-[var(--accent-soft)] transition-all">
+    <div className="relative group my-3 rounded-xl border border-[var(--coding-border)]/60 overflow-hidden shadow-sm" style={{ background: '#fafaf8', color: '#24292e' }}>
+      <div className="flex items-center justify-between px-3 py-1.5 border-b border-[var(--coding-border)]/50" style={{ background: 'rgba(246,248,250,0.9)' }}>
+        <span className="text-[11px] font-mono" style={{ color: '#6a737d' }}>{language}</span>
+        <button onClick={handleCopy} className="p-1 rounded-md hover:bg-black/5 transition-all" style={{ color: '#6a737d' }}>
           {copied ? <Check size={12} className="text-emerald-500" /> : <Copy size={12} />}
         </button>
       </div>
       <Highlight theme={themes.github} code={code} language={language || 'text'}>
-        {({ tokens, getLineProps, getTokenProps }) => (
-          <pre className="p-3 text-[13px] leading-5 font-mono overflow-x-auto bg-[var(--coding-surface-raised)]">
+        {({ style, tokens, getLineProps, getTokenProps }) => (
+          <pre className="p-3 text-[13px] leading-5 font-mono overflow-x-auto" style={{ ...style, background: '#fafaf8' }}>
             {tokens.map((line, i) => (
-              <div key={i} {...getLineProps({ line })} className="hover:bg-[var(--accent-soft)]/20 transition-colors">
-                <span className="inline-block w-8 text-right mr-3 text-[var(--text-faint)] select-none text-[11px]">{i + 1}</span>
+              <div key={i} {...getLineProps({ line })} className="hover:bg-black/[0.03] transition-colors">
+                <span className="inline-block w-8 text-right mr-3 select-none text-[11px]" style={{ color: '#959da5' }}>{i + 1}</span>
                 {line.map((token, key) => <span key={key} {...getTokenProps({ token })} />)}
               </div>
             ))}

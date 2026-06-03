@@ -260,7 +260,7 @@ export const CodingComposer = forwardRef(function CodingComposer({ onSend, disab
   const modelName = activeProfile?.name || activeProfile?.model || 'Select model';
 
   return (
-    <div className="border-t border-[var(--coding-border)]/40 bg-[var(--coding-surface-raised)] relative backdrop-blur-md coding-mobile-composer">
+    <div className="border-t border-[var(--coding-border)]/40 bg-[var(--coding-surface-raised)] relative backdrop-blur-md coding-mobile-composer" onDragOver={handleDragOver} onDrop={handleDrop}>
       {/* 会话历史下拉菜单 */}
       {showSessionMenu && (
         <SessionHistoryDropdown

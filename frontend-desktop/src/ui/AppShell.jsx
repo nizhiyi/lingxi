@@ -303,7 +303,7 @@ function NexusNotificationOverlay() {
   );
 }
 
-const CodingShellPage = lazyRetry(() => import('../code/CodingShell').then(m => ({ default: m.CodingShell })));
+const CodingShellPage = lazyRetry(() => import('../code/v2/CodingShellV2').then(m => ({ default: m.CodingShellV2 })));
 const ModeSelectorPage = lazyRetry(() => import('../ModeSelector'));
 
 export function AppShell() {

@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import {
   Folder, FolderOpen, FileText, FileCode2, Image, ChevronRight, ChevronDown,
   RefreshCw, Home, X, Search,
@@ -40,25 +40,30 @@ const GIT_STATUS_MAP = {
 };
 
 function TreeNode({ entry, depth, onNavigate, expanded, onToggle, filter }) {
-  const Icon = getFileIcon(entry.name, entry.is_dir);
-  const isOpen = expanded[entry.path];
-  const color = entry.is_dir ? 'text-amber-500' : getFileColor(entry.name);
   const codingActiveFiles = useStore((s) => s.codingActiveFiles);
   const workspaceChanges = useStore((s) => s.workspaceChanges);
-  const isActive = codingActiveFiles?.has?.(entry.path) || false;
-  const gitChange = workspaceChanges?.find(c => entry.path?.endsWith(c.path));
+
+  if (!entry || typeof entry !== 'object' || !entry.name) return null;
+
+  const nameStr = String(entry.name || '');
+  const pathStr = String(entry.path || '');
+  const Icon = getFileIcon(nameStr, entry.is_dir);
+  const isOpen = expanded[pathStr];
+  const color = entry.is_dir ? 'text-amber-500' : getFileColor(nameStr);
+  const isActive = codingActiveFiles instanceof Set ? codingActiveFiles.has(pathStr) : false;
+  const gitChange = Array.isArray(workspaceChanges) ? workspaceChanges.find(c => pathStr.endsWith(c.path)) : null;
   const gitStatus = gitChange ? GIT_STATUS_MAP[gitChange.status] : null;
 
-  if (filter && !entry.is_dir && !entry.name.toLowerCase().includes(filter.toLowerCase())) {
-    return null;
-  }
-
   const handleDragStart = useCallback((e) => {
-    e.dataTransfer.setData('text/plain', entry.path);
-    e.dataTransfer.setData('application/x-file-path', entry.path);
+    e.dataTransfer.setData('text/plain', pathStr);
+    e.dataTransfer.setData('application/x-file-path', pathStr);
     e.dataTransfer.setData('application/x-is-dir', entry.is_dir ? 'true' : 'false');
     e.dataTransfer.effectAllowed = 'copy';
-  }, [entry]);
+  }, [pathStr, entry.is_dir]);
+
+  if (filter && !entry.is_dir && !nameStr.toLowerCase().includes(filter.toLowerCase())) {
+    return null;
+  }
 
   return (
     <div>
@@ -70,19 +75,19 @@ function TreeNode({ entry, depth, onNavigate, expanded, onToggle, filter }) {
         )}
         style={{ paddingLeft: `${8 + depth * 14}px` }}
         onClick={() => {
-          if (entry.is_dir) onToggle(entry.path);
-          else onNavigate(entry.path);
+          if (entry.is_dir) onToggle(pathStr);
+          else onNavigate(pathStr);
         }}
         draggable
         onDragStart={handleDragStart}
-        title={entry.is_dir ? `拖拽引用目录: ${entry.name}` : `拖拽引用: ${entry.name}`}
+        title={entry.is_dir ? `拖拽引用目录: ${nameStr}` : `拖拽引用: ${nameStr}`}
       >
         {entry.is_dir ? (
           isOpen ? <ChevronDown size={11} className="shrink-0 text-[var(--text-faint)]" />
                  : <ChevronRight size={11} className="shrink-0 text-[var(--text-faint)]" />
         ) : <span className="w-[11px] shrink-0" />}
         <Icon size={13} className={cn('shrink-0', color, isActive && 'text-amber-500')} />
-        <span className={cn('truncate', gitStatus && 'font-medium')}>{entry.name}</span>
+        <span className={cn('truncate', gitStatus && 'font-medium')}>{nameStr}</span>
         {gitStatus && (
           <span className={cn('ml-auto text-[9px] font-bold px-1 rounded shrink-0', gitStatus.color)}>
             {gitStatus.label}
@@ -91,9 +96,9 @@ function TreeNode({ entry, depth, onNavigate, expanded, onToggle, filter }) {
         {isActive && <span className="ml-auto w-1.5 h-1.5 rounded-full bg-amber-400 animate-ping shrink-0" />}
       </button>
 
-      {entry.is_dir && isOpen && entry.children && (
+      {entry.is_dir && isOpen && Array.isArray(entry.children) && (
         <div>
-          {entry.children.map((child) => (
+          {entry.children.map((child) => child && child.path ? (
             <TreeNode
               key={child.path}
               entry={child}
@@ -103,7 +108,7 @@ function TreeNode({ entry, depth, onNavigate, expanded, onToggle, filter }) {
               onToggle={onToggle}
               filter={filter}
             />
-          ))}
+          ) : null)}
         </div>
       )}
     </div>
@@ -115,6 +120,8 @@ export function FileSidebar({ projectPath, onFileSelect, onClose, embedded }) {
   const [expanded, setExpanded] = useState({});
   const [loading, setLoading] = useState(false);
   const [filter, setFilter] = useState('');
+  const [filterInput, setFilterInput] = useState('');
+  const filterTimer = useRef(null);
 
   const loadDir = useCallback(async (dirPath) => {
     try {
@@ -191,11 +198,21 @@ export function FileSidebar({ projectPath, onFileSelect, onClose, embedded }) {
           <Search size={11} className="text-[var(--text-faint)] shrink-0" />
           <input
             type="text"
-            value={filter}
-            onChange={(e) => setFilter(e.target.value)}
+            value={filterInput}
+            onChange={(e) => {
+              const val = e.target.value;
+              setFilterInput(val);
+              if (filterTimer.current) clearTimeout(filterTimer.current);
+              filterTimer.current = setTimeout(() => setFilter(val), 150);
+            }}
             placeholder="搜索文件…"
             className="flex-1 bg-transparent outline-none text-[var(--text)] placeholder-[var(--text-faint)]"
           />
+          {filterInput && (
+            <button onClick={() => { setFilterInput(''); setFilter(''); }} className="text-[var(--text-faint)] hover:text-[var(--text-soft)]">
+              <X size={10} />
+            </button>
+          )}
         </div>
       </div>
 
@@ -212,7 +229,7 @@ export function FileSidebar({ projectPath, onFileSelect, onClose, embedded }) {
             <p>加载中…</p>
           </div>
         )}
-        {tree.map((entry) => (
+        {tree.map((entry) => entry && entry.path ? (
           <TreeNode
             key={entry.path}
             entry={entry}
@@ -222,7 +239,7 @@ export function FileSidebar({ projectPath, onFileSelect, onClose, embedded }) {
             onToggle={handleToggle}
             filter={filter}
           />
-        ))}
+        ) : null)}
       </div>
 
       <div className="px-2 py-1.5 border-t border-[var(--coding-border)] text-[10px] text-[var(--text-faint)] text-center">

@@ -56,15 +56,20 @@ export const createCodingSlice = (set, get) => ({
   codingTeam: null,
   setCodingTeam: (team) => set({ codingTeam: team }),
 
-  // 思考模式开关
-  codingThinkingEnabled: localStorage.getItem('lingxi-coding-thinking') !== 'false',
+  // 交互模式切换（normal=直接执行, plan=先规划再执行, think=深度思考）
+  codingMode: localStorage.getItem('lingxi-coding-mode') || 'normal',
+  codingThinkingEnabled: (localStorage.getItem('lingxi-coding-mode') || 'normal') === 'think',
   setCodingThinkingEnabled: (v) => {
     localStorage.setItem('lingxi-coding-thinking', v ? 'true' : 'false');
     set({ codingThinkingEnabled: v });
+    if (v && get().codingMode !== 'think') {
+      localStorage.setItem('lingxi-coding-mode', 'think');
+      set({ codingMode: 'think' });
+    } else if (!v && get().codingMode === 'think') {
+      localStorage.setItem('lingxi-coding-mode', 'normal');
+      set({ codingMode: 'normal' });
+    }
   },
-
-  // 交互模式切换（normal=直接执行, plan=先规划再执行, think=深度思考）
-  codingMode: localStorage.getItem('lingxi-coding-mode') || 'normal',
   setCodingMode: (mode) => {
     localStorage.setItem('lingxi-coding-mode', mode);
     set({ codingMode: mode, codingThinkingEnabled: mode === 'think' });

@@ -268,7 +268,7 @@ export function CodingShell() {
 
   return (
     <CodingErrorBoundary title="Coding View 发生错误">
-    <div className="h-screen flex flex-col bg-[var(--bg)]">
+    <div className="h-screen flex flex-col bg-[var(--bg)] overflow-hidden">
       {/* 移动端顶部栏 */}
       {isMobile && (
         <MobileHeader
@@ -284,7 +284,7 @@ export function CodingShell() {
       {!isMobile && <CodingTabBar />}
 
       {/* 三栏主体 */}
-      <div className="flex-1 flex min-h-0">
+      <div className="flex-1 flex min-h-0 overflow-hidden">
         {/* 左栏：WorkspacePanel */}
         {!isMobile && (
           <WorkspacePanel
@@ -295,8 +295,8 @@ export function CodingShell() {
         )}
 
         {/* 中栏：聊天/设置区域 + 终端 */}
-        <div className="flex-1 flex flex-col min-h-0">
-          <div className="flex-1 flex flex-col min-h-0">
+        <div className="flex-1 flex flex-col min-h-0 overflow-hidden">
+          <div className="flex-1 flex flex-col min-h-0 overflow-hidden">
             <Suspense fallback={<PageFallback />}>
               {/* Chat view always mounted, hidden when not active (preserves scroll + streaming state) */}
               <div className={cn('flex-1 flex flex-col min-h-0', codingView !== 'chat' && 'hidden')}>

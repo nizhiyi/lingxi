@@ -549,21 +549,21 @@ function CodeBlock({ language, code }) {
   const displayLang = isFilePath ? language.split('/').pop().split('.').pop() : language;
 
   return (
-    <div className="relative my-2.5 rounded-xl overflow-hidden border border-[var(--coding-border)]/50 bg-[#fafaf8] shadow-sm">
-      <div className="flex items-center gap-2 px-3 py-2 bg-gradient-to-r from-[var(--coding-surface-raised)] to-[var(--coding-surface)] border-b border-[var(--coding-border)]/50">
-        <span className="text-[10px] text-[var(--text-faint)] font-mono uppercase">{displayLang}</span>
-        <span className="text-[10px] text-[var(--text-faint)]">{code.split('\n').length} lines</span>
+    <div className="relative my-2.5 rounded-xl overflow-hidden border border-[var(--coding-border)]/50 shadow-sm" style={{ background: '#fafaf8', color: '#24292e' }}>
+      <div className="flex items-center gap-2 px-3 py-2 border-b border-[var(--coding-border)]/50" style={{ background: 'rgba(246,248,250,0.9)' }}>
+        <span className="text-[10px] font-mono uppercase" style={{ color: '#6a737d' }}>{displayLang}</span>
+        <span className="text-[10px]" style={{ color: '#6a737d' }}>{code.split('\n').length} lines</span>
         <div className="flex-1" />
-        <button onClick={handleCopy} className="text-[var(--text-faint)] hover:text-[var(--text-soft)] transition-all p-1 rounded-md hover:bg-[var(--accent-soft)]">
+        <button onClick={handleCopy} className="transition-all p-1 rounded-md hover:bg-black/5" style={{ color: '#6a737d' }}>
           {copied ? <Check size={12} className="text-emerald-500" /> : <Copy size={12} />}
         </button>
       </div>
       <Highlight theme={themes.github} code={code} language={displayLang || 'text'}>
         {({ style, tokens, getLineProps, getTokenProps }) => (
-          <pre className="overflow-x-auto px-0 py-2 text-[12px] leading-[1.65] font-mono" style={{ ...style, background: 'transparent' }}>
+          <pre className="overflow-x-auto px-0 py-2 text-[12px] leading-[1.65] font-mono" style={{ ...style, background: '#fafaf8' }}>
             {tokens.map((line, i) => (
-              <div key={i} {...getLineProps({ line })} className="flex hover:bg-[var(--accent-soft)]/30 transition-colors">
-                <span className="inline-block w-10 text-right pr-3 text-[var(--text-faint)] select-none text-[10px] leading-[1.65] shrink-0 border-r border-[var(--coding-border)]/30">{i + 1}</span>
+              <div key={i} {...getLineProps({ line })} className="flex hover:bg-black/[0.03] transition-colors">
+                <span className="inline-block w-10 text-right pr-3 select-none text-[10px] leading-[1.65] shrink-0 border-r border-[#e1e4e8]" style={{ color: '#959da5' }}>{i + 1}</span>
                 <span className="pl-3">
                   {line.map((token, key) => (
                     <span key={key} {...getTokenProps({ token })} />

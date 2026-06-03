@@ -109,9 +109,10 @@ func CodingChat(c *gin.Context) {
 // POST /api/coding/chat/answer-batch
 func CodingChatAnswerBatch(c *gin.Context) {
 	var body struct {
-		SessionID  string            `json:"sessionId"`
-		Answers    map[string]string `json:"answers"`
-		WorkingDir string            `json:"workingDir"`
+		SessionID    string            `json:"sessionId"`
+		Answers      map[string]string `json:"answers"`
+		WorkingDir   string            `json:"workingDir"`
+		StructuredQA string            `json:"structuredQA"`
 	}
 	if err := c.ShouldBindJSON(&body); err != nil || body.SessionID == "" {
 		c.Status(http.StatusBadRequest)
@@ -130,7 +131,12 @@ func CodingChatAnswerBatch(c *gin.Context) {
 	}
 	message := sb.String()
 
-	appendMessage(sessionID, "user", message)
+	// 保存结构化 JSON 到数据库（前端可渲染为 Q&A UI）
+	dbContent := message
+	if body.StructuredQA != "" {
+		dbContent = body.StructuredQA
+	}
+	appendMessage(sessionID, "user", dbContent)
 	c.JSON(http.StatusAccepted, gin.H{"status": "accepted", "sessionId": sessionID})
 	go runCodingClaude(sessionID, message, nil, body.WorkingDir, true)
 }
@@ -144,6 +150,7 @@ func CodingChatPermissionResponse(c *gin.Context) {
 		Behavior     string                 `json:"behavior"` // "allow" | "deny"
 		UpdatedInput map[string]interface{} `json:"updatedInput,omitempty"`
 		Message      string                 `json:"message,omitempty"`
+		StructuredQA string                 `json:"structuredQA,omitempty"`
 	}
 	if err := c.ShouldBindJSON(&body); err != nil || body.SessionID == "" || body.PermissionID == "" {
 		c.Status(http.StatusBadRequest)
@@ -160,6 +167,11 @@ func CodingChatPermissionResponse(c *gin.Context) {
 	if ch == nil {
 		c.JSON(http.StatusNotFound, gin.H{"error": "no pending permission request"})
 		return
+	}
+
+	// 保存结构化 Q&A 到数据库以便前端重载时能渲染
+	if body.StructuredQA != "" {
+		appendMessage(sessionID, "user", body.StructuredQA)
 	}
 
 	resp := permissionResponse{

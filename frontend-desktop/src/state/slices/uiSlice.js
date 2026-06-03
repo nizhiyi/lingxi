@@ -7,8 +7,11 @@ export const createUISlice = (set, get) => ({
   },
 
   // 应用模式：main=灵犀主模式，coding=编程模式
-  // 每次启动都显示模式选择页，appMode 初始为空
-  appMode: '',
+  // 移动端（H5 远程/手机浏览器）直接进入 coding 模式，桌面端显示模式选择页
+  appMode: (() => {
+    const isMobile = typeof window !== 'undefined' && window.innerWidth < 768 && !window.electronAPI;
+    return isMobile ? 'coding' : '';
+  })(),
   setAppMode: (m) => {
     localStorage.setItem('lingxi-app-mode', m);
     localStorage.setItem('lingxi-mode-selector-v2', '1');

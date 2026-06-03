@@ -155,6 +155,27 @@
   --coding-user-bubble: var(--bg-soft);
 }
 
+/* ── Codex V2 Design Tokens (dark default, overridden by JS applyCodexTheme) ─── */
+:root {
+  --cx-bg: #0a0a0f;
+  --cx-surface: #111118;
+  --cx-surface-2: #1a1a24;
+  --cx-surface-3: #22222e;
+  --cx-border: rgba(255,255,255,0.08);
+  --cx-border-active: rgba(51,156,255,0.4);
+  --cx-text: #e8eaf0;
+  --cx-text-2: #a0a4b0;
+  --cx-text-3: #5c6070;
+  --cx-accent: #339cff;
+  --cx-accent-soft: rgba(51,156,255,0.12);
+  --cx-accent-glow: rgba(51,156,255,0.3);
+  --cx-success: #22c55e;
+  --cx-warning: #eab308;
+  --cx-error: #ef4444;
+  --cx-purple: #a78bfa;
+  --cx-orange: #fb923c;
+}
+
 html, body, #root { height: 100%; }
 body {
   margin: 0;
