@@ -1,0 +1,53 @@
+name: 编译 Windows 客户端
+
+# 触发条件：手动触发（Workflow Dispatch） 或 推送到 main/master 分支时触发
+on:
+  workflow_dispatch:
+  push:
+    branches: [ "main", "master" ]
+
+jobs:
+  build-windows:
+    runs-on: windows-latest # 使用 Windows 环境，以确保编译出 .exe
+    steps:
+      # 1. 检出代码。README 中 git clone 后需要 cd lingxi，所以我们把代码检入到 lingxi/ 文件夹
+      - name: 检出代码
+        uses: actions/checkout@v4
+        with:
+          path: lingxi
+
+      # 2. 安装 Node.js (根据截图要求 >= 20.19，这里用 v22)
+      - name: 安装 Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      # 3. 安装 Go (根据截图要求 >= 1.24)
+      - name: 安装 Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.24'
+
+      # 4. 执行编译脚本
+      - name: 编译 Windows 客户端
+        shell: bash
+        working-directory: lingxi # 这一步会自动执行 cd lingxi
+        run: |
+          # 截图中常见问题提示：如果 Go 编译失败，先执行 go mod tidy
+          cd backend-desktop
+          go mod tidy
+          cd ..
+          
+          # 给脚本添加执行权限
+          chmod +x ./build-desktop.sh
+          
+          # 执行构建命令
+          ./build-desktop.sh win
+
+      # 5. 上传编译好的文件 (.exe)
+      - name: 上传构建产物
+        uses: actions/upload-artifact@v4
+        with:
+          name: lingxi-windows-client
+          # 最终产物在 lingxi/dist-electron/ 目录下，匹配灵犀 {version}.exe
+          path: lingxi/dist-electron/*.exe
