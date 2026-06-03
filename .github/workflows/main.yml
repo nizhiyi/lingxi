@@ -22,6 +22,16 @@ jobs:
         with:
           go-version: '1.24'
 
+      - name: 查看目录结构
+        run: |
+          echo "=== 当前目录 ==="
+          pwd
+          echo "=== 目录树 ==="
+          ls -R
+          echo "=== 查找所有 package.json ==="
+          find . -name "package.json" -print
+        shell: bash
+
       # ⚠️ 核心修复：修改 build-desktop.sh 中的路径逻辑
       - name: 修复 build-desktop.sh 路径错误
         run: |
