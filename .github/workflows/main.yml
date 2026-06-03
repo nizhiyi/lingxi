@@ -50,5 +50,5 @@ jobs:
         with:
           name: windows-build-zip
           path: |
-            dist-electron/*.exe
+            dist-electron/灵犀 Setup*.exe
             # 如果需要上传 dmg (苹果包) 也可以加在下面，但你的目标是 Windows，所以只需 .exe
