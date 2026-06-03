@@ -1,17 +1,17 @@
 name: 编译 Windows 客户端
 
 on:
-  workflow_dispatch:
-  push:
-    branches: [ "main", "master" ]
+  workflow_dispatch:  # 手动触发
 
 jobs:
   build-windows:
     runs-on: windows-latest
     steps:
-      # 1. 检出代码：注意去掉了 path: lingxi，这样代码会直接拉取到项目根目录
+      # 1. 检出代码：path: . 确保代码直接放在 D:\a\lingxi\lingxi，避免额外嵌套
       - name: 检出代码
         uses: actions/checkout@v4
+        with:
+          path: .
 
       # 2. 安装 Node.js (>= 20.19)
       - name: 安装 Node.js
@@ -25,24 +25,23 @@ jobs:
         with:
           go-version: '1.24'
 
-      # 4. 执行构建脚本
+      # 4. 编译 Windows 客户端（去掉了 cd lingxi）
       - name: 编译 Windows 客户端
-        # 注意：先 cd 到 lingxi 目录，再执行脚本
-        # 因为 GitHub 默认下载到了 lingxi 文件夹里
-        shell: bash
         run: |
-          cd lingxi
           # 进入后端目录刷新 go mod
           cd backend-desktop
           go mod tidy
           cd ..
-          # 赋予脚本执行权限并构建
+
+          # 给予执行权限并开始构建
           chmod +x ./build-desktop.sh
           ./build-desktop.sh win
+        shell: bash
 
-      # 5. 上传编译好的文件
+      # 5. 上传生成的 .exe 文件
       - name: 上传构建产物
         uses: actions/upload-artifact@v4
         with:
           name: lingxi-windows-client
-          path: lingxi/dist-electron/*.exe
+          # 最终产物路径在 dist-electron 下
+          path: dist-electron/*.exe
