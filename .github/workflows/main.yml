@@ -11,7 +11,6 @@ jobs:
         uses: actions/checkout@v4
         with:
           path: .
-          fetch-depth: 0  # 改为 0 以拉取全部分支历史，方便恢复文件
 
       - name: 安装 Node.js
         uses: actions/setup-node@v4
@@ -23,24 +22,29 @@ jobs:
         with:
           go-version: '1.24'
 
-      # 🆕 新增：强制恢复缺失的文件
-      - name: 强制恢复缺失的 electron/package.json
-        run: |
-          git fetch origin main --depth=1
-          git checkout origin/main -- electron/package.json
-          echo "======== 检查恢复的文件 ========"
-          ls -l electron/package.json
-          echo "======== 内容开头 ========"
-          head -n 10 electron/package.json
-        shell: bash
-
-      - name: 编译 Windows 客户端
+      # ✅ 关键修复：直接手动构建，绕过有问题的 build-desktop.sh
+      - name: 构建后端
         run: |
           cd backend-desktop
           go mod tidy
+          go build -o ../backend-desktop.exe
+        shell: bash
+
+      - name: 构建前端
+        run: |
+          cd frontend-desktop
+          npm install
+          npm run build
+        shell: bash
+
+      - name: 构建 Windows 客户端 (Electron)
+        run: |
+          # 回到根目录
           cd ..
-          chmod +x ./build-desktop.sh
-          ./build-desktop.sh win
+          # 安装 root 依赖 (包括 electron-builder)
+          npm install
+          # 执行构建 Windows 安装包
+          npm run dist:win
         shell: bash
 
       - name: 上传构建产物
