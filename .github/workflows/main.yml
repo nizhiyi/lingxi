@@ -1,61 +1,61 @@
-name: 编译 Windows 客户端
+name: 在 macOS 上构建 Windows 版
 
 on:
-  workflow_dispatch:
+  workflow_dispatch:  # 允许在 GitHub 网页手动触发
+  push:
+    branches: [ "main" ] # 代码推送到 main 分支时自动触发
 
 jobs:
   build-windows:
-    runs-on: windows-latest
+    runs-on: macos-latest # 或者 macos-14 (Apple Silicon)
+    
     steps:
+      # 1. 检出代码
       - name: 检出代码
         uses: actions/checkout@v4
-        with:
-          path: . # 确保代码在 D:\a\lingxi\lingxi
 
+      # 2. 安装 Node.js (截图要求 >= 20.19)
       - name: 安装 Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: '22'
+          node-version: '22.0.0' # 推荐使用 Node 22
 
+      # 3. 安装 Go (截图要求 >= 1.24)
       - name: 安装 Go
         uses: actions/setup-go@v5
         with:
           go-version: '1.24'
 
-      # 步骤 1：构建后端
-      - name: 构建后端
+      # 4. 安装 macOS 上编译 Windows 所需的交叉编译工具
+      - name: 安装跨平台编译依赖 (Wine, Mingw-w64)
         run: |
-          cd backend-desktop
-          go mod tidy
-          go build -o ../backend-desktop.exe
-        shell: bash
-        # 此时目录停留在 backend-desktop，但 Go 生成的文件在上级目录
+          brew install wine mingw-w64
+          # wine 用于 Electron-builder 生成 NSIS/便携版安装包
+          # mingw-w64 用于 Go 的 CGO 交叉编译（如果有用到 CGO）
 
-      # 步骤 2：构建前端
-      - name: 构建前端
+      # 5. 执行构建脚本
+      - name: 执行 Windows 版构建脚本
+        env:
+          # 显式告诉 Go 编译器目标是 Windows (amd64)
+          GOOS: windows
+          GOARCH: amd64
+          # 按照截图中的“常见问题”设置 npm 缓存路径，防止 EACCES 权限错误
+          NPM_CONFIG_CACHE: /tmp/npm_cache
         run: |
-          cd frontend-desktop
-          npm install
-          npm run build
-        shell: bash
-        # 此时目录停留在 frontend-desktop
-
-      # ✅ 步骤 3：构建 Windows 客户端 (Electron) - 已修复
-      - name: 构建 Windows 客户端 (Electron)
-        run: |
-          # 不要写 cd ..，因为此时目录仍然是 D:\a\lingxi\lingxi
-          # 先回到项目根目录，确保 package.json 能被找到
-          cd D:/a/lingxi/lingxi
+          # 赋予执行权限
+          chmod +x ./build-desktop.sh
           
-          # 安装根目录依赖 (包含 electron-builder)
-          npm install
+          # 创建 npm 缓存文件夹
+          mkdir -p $NPM_CONFIG_CACHE
           
-          # 执行构建 Windows 安装包
-          npm run dist:win
-        shell: bash
+          # 执行 Windows 构建（根据截图中的指令）
+          ./build-desktop.sh win
 
-      - name: 上传构建产物
+      # 6. 上传构建产物 (Windows 可执行文件)
+      - name: 上传 Windows 安装包产物
         uses: actions/upload-artifact@v4
         with:
-          name: lingxi-windows-client
-          path: dist-electron/*.exe
+          name: windows-build-zip
+          path: |
+            dist-electron/*.exe
+            # 如果需要上传 dmg (苹果包) 也可以加在下面，但你的目标是 Windows，所以只需 .exe
