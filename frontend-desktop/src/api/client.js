@@ -67,6 +67,7 @@ export const api = {
   createCheckpoint: (sessionId, messageId) => req('POST', '/api/coding/checkpoint', { sessionId: String(sessionId), messageId }),
   rollbackCheckpoint: (checkpointId) => req('POST', `/api/coding/rollback/${checkpointId}`),
   listCheckpoints: (sessionId) => req('GET', `/api/coding/checkpoints/${sessionId}`),
+  getCheckpointFiles: (checkpointId) => req('GET', `/api/coding/checkpoint-files/${checkpointId}`),
 
   // coding custom agents (sub-agent templates)
   listCodingAgents: () => req('GET', '/api/coding/agents'),

@@ -915,6 +915,14 @@ xattr -cr "/Applications/灵犀.app"
 - **移动端发送/停止按钮优化**：增加最小宽度 + 移动端增大 padding + 右侧增加间距，不再贴边难按
 - **移动端自动进入 Coding View**：非 Electron 环境（H5/手机端）窗口 < 768px 时自动 `appMode = 'coding'`，跳过模式选择页
 
+### Coding View 三大修复（v2026-06 Phase 22）
+- **防止子代理嵌套**：`sdk-runner.js` 自动从子代理 `tools` 中过滤 `Agent`/`Task` 并注入 `disallowedTools`，后端 `buildSDKAgents()` 双重保险
+- **Agents 卡片右侧悬浮**：从消息流移出，改为 CodingShellV2 中 `fixed` 悬浮卡片（右侧中间，AnimatePresence 动画），仅有 sub-agents 时显示
+- **Checkpoint Rollback 修复**：修正 API 调用（`rewindCheckpoint` → `rollbackCheckpoint`），成功后刷新消息
+- **Checkpoint 文件展示**：新增 `GET /api/coding/checkpoint-files/:id` API，前端可展开查看关联文件列表 + 点击查看 git diff
+- **PermissionDialog 增强**：工具摘要行（Bash 命令/文件路径 + Copy）、Deny with reason 模式、完整参数可折叠查看
+- **权限管道确认完整**：permission_request/response stdin/stdout 双向通信 + AskUserQuestion 阻塞流程均已正确实现
+
 ### 纯 Go 协议转换代理（v2026-05 Phase 3）
 - **替代 LiteLLM Bridge**：`backend-desktop/proxy/` 纯 Go 实现，启动零延迟、无 Python 依赖
 - **完整协议转换**：Anthropic `/v1/messages` ↔ OpenAI `/v1/chat/completions`（流式 + 非流式 + Tool use + 思考链 + 多模态）

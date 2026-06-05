@@ -129,6 +129,34 @@ func RollbackCheckpoint(c *gin.Context) {
 	})
 }
 
+// GetCheckpointFiles 返回某检查点的文件路径列表（不含内容）
+// GET /api/coding/checkpoints/:id/files
+func GetCheckpointFiles(c *gin.Context) {
+	cpID, err := strconv.ParseInt(c.Param("id"), 10, 64)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid checkpoint id"})
+		return
+	}
+
+	files, err := db.GetCheckpointFilesSnapshot(cpID)
+	if err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "checkpoint not found"})
+		return
+	}
+
+	type fileSummary struct {
+		Path string `json:"path"`
+	}
+	var result []fileSummary
+	for _, f := range files {
+		result = append(result, fileSummary{Path: f.Path})
+	}
+	if result == nil {
+		result = []fileSummary{}
+	}
+	c.JSON(http.StatusOK, gin.H{"files": result})
+}
+
 // ListCheckpoints 列出某会话的所有检查点
 // GET /api/coding/checkpoints/:sessionId
 func ListCheckpoints(c *gin.Context) {
