@@ -1,54 +1,42 @@
-name: 在 macOS 上构建 Windows 版
+name: 在 Windows 上构建 Windows 版
 
 on:
-  workflow_dispatch:  # 允许在 GitHub 网页手动触发
+  workflow_dispatch:
   push:
-    branches: [ "main" ] # 代码推送到 main 分支时自动触发
+    branches: [ "main" ]
 
 jobs:
   build-windows:
-    runs-on: macos-latest # 或者 macos-14 (Apple Silicon)
-    
+    runs-on: windows-latest        # 改为 Windows 运行器
+
     steps:
-      # 1. 检出代码
       - name: 检出代码
         uses: actions/checkout@v4
 
-      # 2. 安装 Node.js (截图要求 >= 20.19)
       - name: 安装 Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: '20.19' # 推荐使用 Node 22
+          node-version: '20.19'
 
-      # 3. 安装 Go (截图要求 >= 1.24)
       - name: 安装 Go
         uses: actions/setup-go@v5
         with:
           go-version: '1.24'
 
-      # 5. 执行构建脚本
       - name: 执行 Windows 版构建脚本
         env:
-          # 显式告诉 Go 编译器目标是 Windows (amd64)
           GOOS: windows
           GOARCH: amd64
-          # 按照截图中的“常见问题”设置 npm 缓存路径，防止 EACCES 权限错误
           NPM_CONFIG_CACHE: /tmp/npm_cache
         run: |
-          # 赋予执行权限
-          chmod +x ./build-desktop.sh
-          
           # 创建 npm 缓存文件夹
-          mkdir -p $NPM_CONFIG_CACHE
-          
-          # 执行 Windows 构建（根据截图中的指令）
-          ./build-desktop.sh win
+          mkdir -p $env:NPM_CONFIG_CACHE   # PowerShell 语法，与 Git Bash 兼容
+          # 使用 bash 运行原有的 shell 脚本
+          bash ./build-desktop.sh win
 
-      # 6. 上传构建产物 (Windows 可执行文件)
       - name: 上传 Windows 安装包产物
         uses: actions/upload-artifact@v4
         with:
           name: windows-build-zip
           path: |
             dist-electron/灵犀 Setup*.exe
-            # 如果需要上传 dmg (苹果包) 也可以加在下面，但你的目标是 Windows，所以只需 .exe
