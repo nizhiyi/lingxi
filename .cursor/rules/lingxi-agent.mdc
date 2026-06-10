@@ -790,3 +790,12 @@ PORT=3099 DB_PATH=/tmp/lingxi-instance2/smart-agent.db FRONTEND_DIST=../frontend
 - [x] **移动端工作目录切换**：手机端（H5 远程模式）移动端顶栏项目名称可点击切换工作目录（DirectoryBrowserModal 弹窗浏览桌面端目录系统），侧边抽屉也增加项目目录切换入口
 - [x] **移动端发送/停止按钮优化**：ComposerV2 发送/停止按钮增加最小宽度 60px + 移动端增大 padding（px-4 py-2）+ 右侧增加 ml-2 间距，不再贴边难按
 - [x] **移动端自动进入 Coding View**：非 Electron 环境（H5 浏览器/手机端）检测窗口宽度 < 768px 时自动设置 `appMode = 'coding'`，跳过 ModeSelector 模式选择页
+
+### Coding View 三大修复（v2026-06 Phase 22）
+- [x] **防止子代理嵌套**：`sdk-runner.js` 自动从 `agents[].tools` 中过滤 `Agent`/`Task` 并注入 `disallowedTools: ["Agent"]`；后端 `buildSDKAgents()` 已有 `subAgentBaseTools` 排除 Agent + `disallowedTools` 双重保险
+- [x] **Agents 卡片右侧悬浮**：从 `MessageStream.jsx` 移除内联 `SubAgentCard`，改为 `CodingShellV2.jsx` 中 `fixed right-4 top-1/2` 悬浮卡片（260px 宽，AnimatePresence 动画进出），仅当 `subAgents.length > 0` 时显示，新对话自动清空 subAgents 后消失
+- [x] **Checkpoint Rollback 修复**：`CheckpointTimeline.jsx` 从错误的 `api.rewindCheckpoint` 改为正确的 `api.rollbackCheckpoint(cp.id)`，成功后调用 `loadCodingMessages` 刷新
+- [x] **Checkpoint 关联文件展示**：后端新增 `GET /api/coding/checkpoint-files/:id` API（`GetCheckpointFiles` handler），返回文件路径列表（不含内容）；前端 `CheckpointTimeline` 增强为可展开的 `CheckpointItem` 组件，点击展开显示文件列表，点击文件可内联查看 git diff（行级颜色编码）
+- [x] **权限响应管道确认完整**：后端 `handlePermissionRequest` 已实现完整链路（SDK stdout → WS 推送前端 → HTTP 响应 → Go channel → stdin 回写 SDK），`handleAskUserPermission` 同理，无需额外修复
+- [x] **PermissionDialog 增强**：新增工具摘要行（Bash 显示 command、Write/Edit 显示 file_path，带 Terminal/FileText 图标 + Copy 按钮）；增加 Deny with reason 模式（textarea 输入拒绝理由，agent 可看到并调整方案）；完整参数可折叠查看
+- [x] **AskUserQuestion 响应链路确认完整**：`ask_questions_batch` WS 事件携带 `permission_id`，前端 `submitCodingAnswerBatch` 通过 `api.submitCodingPermissionResponse` 路由回后端 channel，`handleAskUserPermission` 从 channel 读取后重新映射答案格式写入 SDK stdin

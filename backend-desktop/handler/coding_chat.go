@@ -30,12 +30,14 @@ import (
 // POST /api/coding/chat
 func CodingChat(c *gin.Context) {
 	var body struct {
-		Message    string         `json:"message"`
-		SessionID  string         `json:"sessionId"`
-		WorkingDir string         `json:"workingDir"`
-		Thinking   *bool          `json:"thinking"`
-		Images     []imagePayload `json:"images"`
-		Files      []struct {
+		Message          string         `json:"message"`
+		SessionID        string         `json:"sessionId"`
+		WorkingDir       string         `json:"workingDir"`
+		Thinking         *bool          `json:"thinking"`
+		PermissionMode   string         `json:"permissionMode"`
+		AlwaysAllowTools []string       `json:"alwaysAllowTools"`
+		Images           []imagePayload `json:"images"`
+		Files            []struct {
 			Name    string `json:"name"`
 			Ext     string `json:"ext"`
 			Content string `json:"content"`
@@ -101,8 +103,12 @@ func CodingChat(c *gin.Context) {
 	if body.Thinking != nil {
 		thinkingEnabled = *body.Thinking
 	}
+	permMode := body.PermissionMode
+	if permMode == "" {
+		permMode = "default"
+	}
 	c.JSON(http.StatusAccepted, gin.H{"status": "accepted", "sessionId": sessionID})
-	go runCodingClaude(sessionID, body.Message, imagePaths, body.WorkingDir, thinkingEnabled)
+	go runCodingClaude(sessionID, body.Message, imagePaths, body.WorkingDir, thinkingEnabled, permMode, body.AlwaysAllowTools)
 }
 
 // CodingChatAnswerBatch 接收 AskQuestion 批量答案
@@ -138,7 +144,7 @@ func CodingChatAnswerBatch(c *gin.Context) {
 	}
 	appendMessage(sessionID, "user", dbContent)
 	c.JSON(http.StatusAccepted, gin.H{"status": "accepted", "sessionId": sessionID})
-	go runCodingClaude(sessionID, message, nil, body.WorkingDir, true)
+	go runCodingClaude(sessionID, message, nil, body.WorkingDir, true, "default", nil)
 }
 
 // CodingChatPermissionResponse 接收前端的权限响应
@@ -236,17 +242,18 @@ func clearSessionPermissions(sessionID int64) {
 // ─── SDK Runner 配置结构 ─────────────────────────────────────────
 
 type sdkRunnerConfig struct {
-	Prompt         string            `json:"prompt"`
-	SessionID      string            `json:"sessionId,omitempty"`
-	SystemPrompt   interface{}       `json:"systemPrompt,omitempty"` // string 或 {type,preset,append} 对象
-	WorkingDir     string            `json:"workingDir,omitempty"`
-	Thinking       bool              `json:"thinking"`
-	ImagePaths     []string          `json:"imagePaths,omitempty"`
-	Env            map[string]string `json:"env,omitempty"`
-	PermissionMode string            `json:"permissionMode,omitempty"` // "bypass" | "interactive"
-	Agents         []interface{}     `json:"agents,omitempty"`         // 自定义子代理模板 (SDK AgentDefinition)
-	Plugins        []interface{}     `json:"plugins,omitempty"`        // SDK 插件 ({type:"local",path:"..."})
-	HooksConfig    interface{}       `json:"hooksConfig,omitempty"`    // hooks 配置（blockedPaths 等）
+	Prompt           string            `json:"prompt"`
+	SessionID        string            `json:"sessionId,omitempty"`
+	SystemPrompt     interface{}       `json:"systemPrompt,omitempty"` // string 或 {type,preset,append} 对象
+	WorkingDir       string            `json:"workingDir,omitempty"`
+	Thinking         bool              `json:"thinking"`
+	ImagePaths       []string          `json:"imagePaths,omitempty"`
+	Env              map[string]string `json:"env,omitempty"`
+	PermissionMode   string            `json:"permissionMode,omitempty"`   // SDK 原生模式: "default" | "acceptEdits" | "bypassPermissions" | "plan"
+	AlwaysAllowTools []string          `json:"alwaysAllowTools,omitempty"` // 用户 "Always Allow" 白名单
+	Agents           []interface{}     `json:"agents,omitempty"`           // 自定义子代理模板 (SDK AgentDefinition)
+	Plugins          []interface{}     `json:"plugins,omitempty"`          // SDK 插件 ({type:"local",path:"..."})
+	HooksConfig      interface{}       `json:"hooksConfig,omitempty"`      // hooks 配置（blockedPaths 等）
 }
 
 // ─── SDK 事件结构 ────────────────────────────────────────────────
@@ -304,7 +311,7 @@ type sdkEvent struct {
 
 // ─── Coding Claude 独立执行（SDK 模式） ─────────────────────────────
 
-func runCodingClaude(sessionID int64, message string, imagePaths []string, workingDir string, thinkingEnabled bool) {
+func runCodingClaude(sessionID int64, message string, imagePaths []string, workingDir string, thinkingEnabled bool, permMode string, alwaysAllowTools []string) {
 	hub := globalHub
 	cfg := config.Get()
 
@@ -362,20 +369,18 @@ func runCodingClaude(sessionID int64, message string, imagePaths []string, worki
 		sdkEnv["DISABLE_THINKING"] = "1"
 	}
 
-	// 读取权限模式设置
-	permMode := getCodingPermissionMode(sessionID)
-
 	// 构建自定义子代理定义（SDK options.agents）
 	customAgents := buildSDKAgents()
 
 	// 构建 SDK runner stdin 配置
 	runnerCfg := sdkRunnerConfig{
-		Prompt:         message,
-		SystemPrompt:   systemPromptObj,
-		Thinking:       thinkingEnabled,
-		ImagePaths:     imagePaths,
-		Env:            sdkEnv,
-		PermissionMode: permMode,
+		Prompt:           message,
+		SystemPrompt:     systemPromptObj,
+		Thinking:         thinkingEnabled,
+		ImagePaths:       imagePaths,
+		Env:              sdkEnv,
+		PermissionMode:   permMode,
+		AlwaysAllowTools: alwaysAllowTools,
 	}
 	if len(customAgents) > 0 {
 		agentsDefs := make([]interface{}, len(customAgents))
@@ -1295,15 +1300,11 @@ func remapAnswersToQuestionText(rawQuestions []json.RawMessage, answersRaw any) 
 	return result
 }
 
-// getCodingPermissionMode 读取当前会话的权限模式
-// sessions.permission_mode: "trust"=完全放行, "managed"=权限管控
+// getCodingPermissionMode is deprecated — permission mode now comes directly
+// from the frontend request body (SDK native modes: default/acceptEdits/bypassPermissions/plan).
+// Kept as a no-op fallback for session-level overrides if ever needed.
 func getCodingPermissionMode(sessionID int64) string {
-	var mode string
-	err := db.DB.QueryRow(`SELECT COALESCE(permission_mode, '') FROM sessions WHERE id=?`, sessionID).Scan(&mode)
-	if err == nil && mode == "managed" {
-		return "interactive"
-	}
-	return "bypass"
+	return "default"
 }
 
 // buildSDKEnv 构建 SDK runner 的环境变量（key→value map，由 sdk-runner.js 合并到 process.env）
@@ -1367,6 +1368,19 @@ func buildSDKEnv(cfg *config.Config) map[string]string {
 	// 不需要跨工具调用匹配 task ID。TaskCreate 的 ID 在 tool_result 中分配（我们不捕获），
 	// 导致后续 TaskUpdate 的 taskId 无法匹配 → 任务状态不更新。
 	env["CLAUDE_CODE_ENABLE_TASKS"] = "0"
+
+	// 注入 BASH_ENV：让非交互式 bash（SDK Bash 工具）也加载用户 shell 配置
+	// Electron 启动时从用户 shell 提取 alias 并生成 .lingxi-shell-env.sh，
+	// 这样用户终端中定义的 alias/function/自定义命令在灵犀中同样可用
+	if shellEnv := os.Getenv("LINGXI_SHELL_ENV"); shellEnv != "" {
+		if _, err := os.Stat(shellEnv); err == nil {
+			env["BASH_ENV"] = shellEnv
+		}
+	}
+	// 传递用户真实 HOME（Electron 为 AI 引擎隔离了 HOME）
+	if userHome := os.Getenv("USER_HOME"); userHome != "" {
+		env["USER_HOME"] = userHome
+	}
 
 	maskedKey := authToken
 	if len(maskedKey) > 10 {

@@ -351,6 +351,7 @@ func main() {
 	api.POST("/coding/checkpoint", handler.CreateCheckpoint)
 	api.POST("/coding/rollback/:id", handler.RollbackCheckpoint)
 	api.GET("/coding/checkpoints/:sessionId", handler.ListCheckpoints)
+	api.GET("/coding/checkpoint-files/:id", handler.GetCheckpointFiles)
 	api.GET("/coding/agents", handler.ListCodingAgents)
 	api.POST("/coding/agents", handler.SaveCodingAgent)
 	api.DELETE("/coding/agents/:id", handler.DeleteCodingAgent)

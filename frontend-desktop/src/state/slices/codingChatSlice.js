@@ -478,6 +478,10 @@ export const createCodingChatSlice = (set, get) => ({
       const payload = { message, sessionId: String(sid), images, files };
       if (effectiveWorkingDir) payload.workingDir = effectiveWorkingDir;
       if (thinking !== undefined) payload.thinking = thinking;
+      const permMode = get().codingPermissionMode;
+      if (permMode) payload.permissionMode = permMode;
+      const alwaysAllow = get().codingAlwaysAllowTools;
+      if (alwaysAllow?.length) payload.alwaysAllowTools = alwaysAllow;
       await api.sendCodingChat(payload);
     } catch (e) {
       set({ codingIsStreaming: false, codingAgentState: 'IDLE' });

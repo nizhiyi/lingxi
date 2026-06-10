@@ -20,8 +20,19 @@ type codingAgentDef struct {
 	MaxTurns    int    `json:"maxTurns,omitempty"`
 }
 
+// subAgentBaseTools 是子代理允许使用的基础工具列表。
+// 根据 SDK 文档：子代理不能生成自己的子代理，因此显式排除 Agent 工具。
+var subAgentBaseTools = []string{
+	"Bash", "Read", "Write", "Edit", "MultiEdit",
+	"Glob", "Grep", "LS", "WebFetch", "WebSearch",
+	"AskUserQuestion", "Skill",
+	"TodoWrite",
+}
+
 // buildSDKAgents 读取 coding_agents 表中的自定义子代理模板，
-// 转换为 SDK options.agents 格式
+// 转换为 SDK options.agents 格式。
+// 每个子代理显式设置 tools（排除 Agent）+ disallowedTools 双重保险，
+// 防止子代理递归生成嵌套子代理。
 func buildSDKAgents() []map[string]interface{} {
 	rows, err := db.DB.Query(`SELECT id, name, description, prompt, model, max_turns FROM coding_agents ORDER BY id`)
 	if err != nil {
@@ -36,9 +47,11 @@ func buildSDKAgents() []map[string]interface{} {
 			continue
 		}
 		def := map[string]interface{}{
-			"name":        a.Name,
-			"description": a.Description,
-			"prompt":      a.Prompt,
+			"name":            a.Name,
+			"description":     a.Description,
+			"prompt":          a.Prompt,
+			"tools":           subAgentBaseTools,
+			"disallowedTools": []string{"Agent"},
 		}
 		if a.Model != "" {
 			def["model"] = a.Model

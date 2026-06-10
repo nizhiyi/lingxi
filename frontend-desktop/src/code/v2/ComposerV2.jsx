@@ -83,6 +83,8 @@ export const ComposerV2 = forwardRef(function ComposerV2({
   const agents = useStore((s) => s.agents);
   const activeAgentId = useStore((s) => s.activeAgentId);
   const setActiveAgent = useStore((s) => s.setActiveAgent);
+  const codingThinkingEnabled = useStore((s) => s.codingThinkingEnabled);
+  const setCodingThinkingEnabled = useStore((s) => s.setCodingThinkingEnabled);
   const [showModelMenu, setShowModelMenu] = useState(false);
   const [showAgentMenu, setShowAgentMenu] = useState(false);
   const permBtnRef = useRef(null);
@@ -317,22 +319,19 @@ export const ComposerV2 = forwardRef(function ComposerV2({
                   'flex items-center gap-1 px-2 py-1 rounded-md text-[11px] font-medium transition-colors',
                   mode === 'teams'
                     ? 'bg-[var(--cx-purple)]/15 text-[var(--cx-purple)]'
-                    : mode === 'think'
-                      ? 'bg-purple-500/15 text-purple-500'
-                      : mode === 'plan'
-                        ? 'bg-[var(--cx-warning)]/15 text-[var(--cx-warning)]'
-                        : 'bg-[var(--cx-surface-2)] text-[var(--cx-text-2)] hover:bg-[var(--cx-surface-3)]'
+                    : mode === 'plan'
+                      ? 'bg-[var(--cx-warning)]/15 text-[var(--cx-warning)]'
+                      : 'bg-[var(--cx-surface-2)] text-[var(--cx-text-2)] hover:bg-[var(--cx-surface-3)]'
                 )}
               >
-                {mode === 'teams' ? <Users size={12} /> : mode === 'think' ? <Brain size={12} /> : mode === 'plan' ? <Brain size={12} /> : <Sparkles size={12} />}
-                <span>{mode === 'teams' ? 'Teams' : mode === 'think' ? 'Think' : mode === 'plan' ? 'Plan' : 'Agent'}</span>
+                {mode === 'teams' ? <Users size={12} /> : mode === 'plan' ? <Brain size={12} /> : <Sparkles size={12} />}
+                <span>{mode === 'teams' ? 'Teams' : mode === 'plan' ? 'Plan' : 'Agent'}</span>
                 <ChevronDown size={10} />
               </button>
               <DropupPortal anchorRef={modeBtnRef} open={showModeMenu} onClose={() => setShowModeMenu(false)} width={160}>
                 <div className="py-1 bg-[var(--cx-surface-2)] border border-[var(--cx-border)] rounded-lg shadow-xl">
                   {[
                     { id: 'normal', label: 'Agent', icon: Sparkles },
-                    { id: 'think', label: 'Think', icon: Brain },
                     { id: 'plan', label: 'Plan', icon: Brain },
                     { id: 'teams', label: 'Agent Teams', icon: Users },
                   ].map(m => (
@@ -353,6 +352,21 @@ export const ComposerV2 = forwardRef(function ComposerV2({
                 </div>
               </DropupPortal>
             </div>
+
+            {/* Think toggle (independent of mode) */}
+            <button
+              onClick={() => setCodingThinkingEnabled(!codingThinkingEnabled)}
+              className={cn(
+                'flex items-center gap-1 px-2 py-1 rounded-md text-[11px] font-medium transition-colors',
+                codingThinkingEnabled
+                  ? 'bg-purple-500/15 text-purple-600'
+                  : 'bg-[var(--cx-surface-2)] text-[var(--cx-text-3)] hover:bg-[var(--cx-surface-3)] hover:text-[var(--cx-text-2)]'
+              )}
+              title={codingThinkingEnabled ? 'Thinking ON (click to disable)' : 'Thinking OFF (click to enable)'}
+            >
+              <Brain size={12} />
+              <span>Think</span>
+            </button>
 
             {/* Model selector */}
             <div>

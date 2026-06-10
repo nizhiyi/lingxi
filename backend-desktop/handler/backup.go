@@ -27,7 +27,7 @@ func backupPath() string {
 
 func doVacuumBackup() error {
 	dst := backupPath()
-	_, err := db.DB.Exec(fmt.Sprintf(`VACUUM INTO '%s'`, dst))
+	_, err := db.DB.Exec(fmt.Sprintf(`VACUUM INTO '%s'`, filepath.ToSlash(dst)))
 	if err != nil {
 		slog.Warn("vacuum backup failed", "dst", dst, "err", err)
 		return err
@@ -73,7 +73,7 @@ func StartDailyBackup(stop <-chan struct{}) {
 // ExportBackup GET /api/backup/export — download a fresh backup copy.
 func ExportBackup(c *gin.Context) {
 	dst := filepath.Join(os.TempDir(), fmt.Sprintf("lingxi-export-%d.db", time.Now().UnixMilli()))
-	_, err := db.DB.Exec(fmt.Sprintf(`VACUUM INTO '%s'`, dst))
+	_, err := db.DB.Exec(fmt.Sprintf(`VACUUM INTO '%s'`, filepath.ToSlash(dst)))
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "备份失败: " + err.Error()})
 		return

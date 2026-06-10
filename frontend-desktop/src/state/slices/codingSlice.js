@@ -56,39 +56,44 @@ export const createCodingSlice = (set, get) => ({
   codingTeam: null,
   setCodingTeam: (team) => set({ codingTeam: team }),
 
-  // 交互模式切换（normal=直接执行, plan=先规划再执行, think=深度思考）
+  // 交互模式切换（normal=直接执行, plan=先规划再执行）
   codingMode: localStorage.getItem('lingxi-coding-mode') || 'normal',
-  codingThinkingEnabled: (localStorage.getItem('lingxi-coding-mode') || 'normal') === 'think',
+  setCodingMode: (mode) => {
+    localStorage.setItem('lingxi-coding-mode', mode);
+    set({ codingMode: mode });
+  },
+
+  // 思考模式独立开关（与 codingMode 解耦，任何模式下都可以打开/关闭）
+  codingThinkingEnabled: localStorage.getItem('lingxi-coding-thinking') === 'true',
   setCodingThinkingEnabled: (v) => {
     localStorage.setItem('lingxi-coding-thinking', v ? 'true' : 'false');
     set({ codingThinkingEnabled: v });
-    if (v && get().codingMode !== 'think') {
-      localStorage.setItem('lingxi-coding-mode', 'think');
-      set({ codingMode: 'think' });
-    } else if (!v && get().codingMode === 'think') {
-      localStorage.setItem('lingxi-coding-mode', 'normal');
-      set({ codingMode: 'normal' });
-    }
-  },
-  setCodingMode: (mode) => {
-    localStorage.setItem('lingxi-coding-mode', mode);
-    set({ codingMode: mode, codingThinkingEnabled: mode === 'think' });
   },
 
-  // 权限管控模式（trust=全部自动放行, managed=分级管控, strict=所有写入需确认）
-  codingPermissionMode: localStorage.getItem('lingxi-coding-permission-mode') || 'managed',
+  // SDK 原生权限模式（直通到 sdk-runner options.permissionMode）
+  // default: 只读工具自动批准，写入/执行需确认
+  // acceptEdits: 文件编辑自动批准，Bash/Shell 需确认
+  // bypassPermissions: 所有工具自动批准
+  // plan: 只读模式，不执行写入
+  codingPermissionMode: localStorage.getItem('lingxi-coding-permission-mode') || 'default',
   setCodingPermissionMode: (mode) => {
     localStorage.setItem('lingxi-coding-permission-mode', mode);
     set({ codingPermissionMode: mode });
   },
 
-  // 权限白名单/黑名单
-  codingPermissionWhitelist: JSON.parse(localStorage.getItem('lingxi-coding-perm-whitelist') || '[]'),
-  codingPermissionBlacklist: JSON.parse(localStorage.getItem('lingxi-coding-perm-blacklist') || '[]'),
-  updatePermissionLists: (whitelist, blacklist) => {
-    localStorage.setItem('lingxi-coding-perm-whitelist', JSON.stringify(whitelist));
-    localStorage.setItem('lingxi-coding-perm-blacklist', JSON.stringify(blacklist));
-    set({ codingPermissionWhitelist: whitelist, codingPermissionBlacklist: blacklist });
+  // "Always Allow" 记忆白名单（本会话内持久化）
+  codingAlwaysAllowTools: JSON.parse(localStorage.getItem('lingxi-coding-always-allow') || '[]'),
+  addAlwaysAllowTool: (toolName) => {
+    const list = get().codingAlwaysAllowTools;
+    if (!list.includes(toolName)) {
+      const updated = [...list, toolName];
+      localStorage.setItem('lingxi-coding-always-allow', JSON.stringify(updated));
+      set({ codingAlwaysAllowTools: updated });
+    }
+  },
+  clearAlwaysAllowTools: () => {
+    localStorage.removeItem('lingxi-coding-always-allow');
+    set({ codingAlwaysAllowTools: [] });
   },
 
   // Coding View 主题

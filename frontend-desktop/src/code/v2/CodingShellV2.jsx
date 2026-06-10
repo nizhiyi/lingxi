@@ -1,4 +1,4 @@
-import { useEffect, useState, useCallback, useRef, lazy, Suspense } from 'react';
+import { useEffect, useState, useCallback, useRef, useMemo, lazy, Suspense } from 'react';
 import { AnimatePresence, motion } from 'framer-motion';
 import { X, ChevronRight, Folder, ArrowLeft, Home, Copy, Check, Edit3, Save, FolderOpen } from 'lucide-react';
 import { cn } from '../../ui/cn';
@@ -19,6 +19,7 @@ import { api } from '../../api/client';
 import { applyCodexTheme, getCodexTheme } from './codexTheme';
 import { TeamSetupWizard } from './TeamSetupWizard';
 import { TeamProgressView } from './TeamProgressView';
+import { SubAgentCard } from './SubAgentCard';
 
 function FilePreviewModal({ filePath, onClose }) {
   const [content, setContent] = useState('');
@@ -222,6 +223,22 @@ export function CodingShellV2() {
 
   const codingTerminalOpen = useStore((s) => s.codingTerminalOpen);
   const toggleCodingTerminal = useStore((s) => s.toggleCodingTerminal);
+  const subAgents = useStore((s) => s.subAgents);
+  const liveBlocks = useStore((s) => s.codingLiveBlocks);
+
+  const enrichedAgents = useMemo(() => {
+    if (subAgents.length === 0) return subAgents;
+    const recentTools = liveBlocks
+      .filter(b => b.type === 'tool' && !b.parent_tool_use_id)
+      .slice(-5)
+      .map(b => ({ name: b.name || '', ts: b.startedAt || Date.now(), done: !!b.done, endedAt: b.endedAt }));
+    return subAgents.map(a => {
+      if (a.status === 'working' && (!a.toolActivities || a.toolActivities.length === 0) && recentTools.length > 0) {
+        return { ...a, toolActivities: recentTools };
+      }
+      return a;
+    });
+  }, [subAgents, liveBlocks]);
 
   const [sidebarAction, setSidebarAction] = useState(null);
   const [sessionsVisible, setSessionsVisible] = useState(false);
@@ -509,6 +526,21 @@ export function CodingShellV2() {
             <TerminalPanel projectPath={projectPath} onClose={toggleCodingTerminal} />
           )}
         </div>
+
+        {/* Floating Sub-agent card (right-center, only when agents active) */}
+        <AnimatePresence>
+          {subAgents.length > 0 && !isMobile && (
+            <motion.div
+              initial={{ opacity: 0, x: 20 }}
+              animate={{ opacity: 1, x: 0 }}
+              exit={{ opacity: 0, x: 20 }}
+              transition={{ type: 'spring', stiffness: 400, damping: 30 }}
+              className="fixed right-4 top-1/2 -translate-y-1/2 z-50 w-[260px] max-h-[50vh] overflow-y-auto shadow-2xl rounded-xl"
+            >
+              <SubAgentCard agents={enrichedAgents} />
+            </motion.div>
+          )}
+        </AnimatePresence>
 
         {/* Team setup wizard */}
         <AnimatePresence>

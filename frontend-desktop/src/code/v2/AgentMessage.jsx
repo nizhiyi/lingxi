@@ -115,12 +115,7 @@ export function AgentMessage({ message, live, blocks: liveBlocksProp }) {
     return Array.isArray(raw) ? raw : [{ type: 'text', text: String(raw) }];
   }, [message, live, liveBlocksProp]);
 
-  const thinkingBlocks = content.filter(b => b.type === 'thinking');
-  const toolBlocks = content.filter(b => b.type === 'tool');
-  const textBlocks = content.filter(b => b.type === 'text');
-  const permBlocks = content.filter(b => b.type === 'permission');
-
-  const fullText = textBlocks.map(b => b.text || '').join('\n');
+  const fullText = content.filter(b => b.type === 'text').map(b => b.text || '').join('\n');
 
   const handleCopy = () => {
     navigator.clipboard.writeText(fullText);
@@ -139,30 +134,26 @@ export function AgentMessage({ message, live, blocks: liveBlocksProp }) {
         <Bot size={14} className="text-[var(--cx-accent)]" />
       </div>
 
-      {/* Content */}
+      {/* Content — rendered in original order */}
       <div className="flex-1 min-w-0 space-y-2">
-        {/* Thinking */}
-        {thinkingBlocks.map((b, i) => (
-          <ThinkingBlock key={`think-${i}`} text={b.text} defaultOpen={live} />
-        ))}
-
-        {/* Tool calls */}
-        {toolBlocks.length > 0 && (
-          <div className="space-y-1.5">
-            {toolBlocks.map((b, i) => (
-              <ToolCallCard key={`tool-${i}`} block={b} />
-            ))}
-          </div>
-        )}
-
-        {/* Text */}
-        {fullText && (
-          <div className="text-[13px] leading-relaxed text-[var(--cx-text)] prose-sm max-w-none">
-            <ReactMarkdown remarkPlugins={[remarkGfm]} components={mdComponents}>
-              {fullText}
-            </ReactMarkdown>
-          </div>
-        )}
+        {content.map((block, i) => {
+          switch (block.type) {
+            case 'thinking':
+              return <ThinkingBlock key={`think-${i}`} text={block.text} defaultOpen={live} />;
+            case 'tool':
+              return <ToolCallCard key={`tool-${i}`} block={block} />;
+            case 'text':
+              return block.text ? (
+                <div key={`text-${i}`} className="text-[13px] leading-relaxed text-[var(--cx-text)] prose-sm max-w-none">
+                  <ReactMarkdown remarkPlugins={[remarkGfm]} components={mdComponents}>
+                    {block.text}
+                  </ReactMarkdown>
+                </div>
+              ) : null;
+            default:
+              return null;
+          }
+        })}
 
         {/* Actions */}
         {!live && fullText && (

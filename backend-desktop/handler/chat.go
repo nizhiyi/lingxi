@@ -12,6 +12,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"strconv"
 	"strings"
 	"sync"
@@ -342,11 +343,19 @@ func buildSystemPrompt(useKB bool) string {
 	// 优先使用 Electron 显式传入的路径（避免 HOME 含空格时拼接出错）
 	kbPath := os.Getenv("KB_PATH")
 	if kbPath == "" {
-		kbPath = filepath.Join(os.Getenv("HOME"), "knowledge")
+		home := os.Getenv("HOME")
+		if home == "" {
+			home, _ = os.UserHomeDir()
+		}
+		kbPath = filepath.Join(home, "knowledge")
 	}
 	skillsPath := os.Getenv("SKILLS_PATH")
 	if skillsPath == "" {
-		skillsPath = filepath.Join(os.Getenv("HOME"), ".claude", "skills")
+		home := os.Getenv("HOME")
+		if home == "" {
+			home, _ = os.UserHomeDir()
+		}
+		skillsPath = filepath.Join(home, ".claude", "skills")
 	}
 	prompt := strings.ReplaceAll(systemPromptTemplate, "{{KB_PATH}}", kbPath)
 	prompt = strings.ReplaceAll(prompt, "{{SKILLS_PATH}}", skillsPath)
@@ -2320,8 +2329,12 @@ func emitFileDiff(hub *Hub, sessionID int64, toolName, toolInput, workingDir str
 	diff := strings.TrimSpace(string(out))
 
 	if err != nil || diff == "" {
-		// 可能是新增文件（未跟踪），尝试 git diff --no-index /dev/null
-		cmd2 := exec.Command("git", "diff", "--no-color", "--no-index", "/dev/null", filePath)
+		// 可能是新增文件（未跟踪），尝试 git diff --no-index
+		nullDev := "/dev/null"
+		if runtime.GOOS == "windows" {
+			nullDev = "NUL"
+		}
+		cmd2 := exec.Command("git", "diff", "--no-color", "--no-index", nullDev, filePath)
 		cmd2.Dir = dir
 		out2, _ := cmd2.Output()
 		diff = strings.TrimSpace(string(out2))
@@ -2688,8 +2701,18 @@ func buildClaudeEnv(cfg *config.Config) []string {
 	set("ANTHROPIC_BASE_URL", baseURL)
 	set("ANTHROPIC_MODEL", modelEnv)
 	set("CLAUDE_CODE_DISABLE_AUTOUPDATER", "1")
-	kbPath := filepath.Join(os.Getenv("HOME"), "knowledge")
-	set("KB_PATH", kbPath)
+	envHome := os.Getenv("HOME")
+	if envHome == "" {
+		envHome, _ = os.UserHomeDir()
+	}
+	set("KB_PATH", filepath.Join(envHome, "knowledge"))
+	// 注入用户 shell 环境（alias/function/PATH），让 AI 能使用用户终端的自定义命令
+	if shellEnv := os.Getenv("LINGXI_SHELL_ENV"); shellEnv != "" {
+		set("BASH_ENV", shellEnv)
+	}
+	if userHome := os.Getenv("USER_HOME"); userHome != "" {
+		set("USER_HOME", userHome)
+	}
 	return env
 }
 
@@ -2922,7 +2945,11 @@ func RunA2AStreamingTurn(sessionID int64, message string, agentID int64, forward
 
 	skillsPath := os.Getenv("SKILLS_PATH")
 	if skillsPath == "" {
-		skillsPath = filepath.Join(os.Getenv("HOME"), ".claude", "skills")
+		h := os.Getenv("HOME")
+		if h == "" {
+			h, _ = os.UserHomeDir()
+		}
+		skillsPath = filepath.Join(h, ".claude", "skills")
 	}
 	if inventory := buildSkillInventory(skillsPath); inventory != "" {
 		anchor := "## 涉及技能（Skills）的任务"

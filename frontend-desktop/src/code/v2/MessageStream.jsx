@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, useCallback, useMemo } from 'react';
+import { useEffect, useRef, useState, useCallback } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { Sparkles, ArrowDown } from 'lucide-react';
 import { cn } from '../../ui/cn';
@@ -9,7 +9,6 @@ import { TaskPanel } from './TaskPanel';
 import { ThinkingIndicator } from './ThinkingIndicator';
 import { PermissionDialog } from './PermissionDialog';
 import { AskQuestionDialog } from './AskQuestionDialog';
-import { SubAgentCard } from './SubAgentCard';
 import { CheckpointTimeline } from './CheckpointTimeline';
 
 export function MessageStream({ projectPath }) {
@@ -22,22 +21,6 @@ export function MessageStream({ projectPath }) {
   const loadCodingMessages = useStore((s) => s.loadCodingMessages);
   const pendingQuestions = useStore((s) => s.codingPendingQuestions);
   const questionsSubmitted = useStore((s) => s.codingQuestionsSubmitted);
-  const subAgents = useStore((s) => s.subAgents);
-
-  const enrichedAgents = useMemo(() => {
-    if (subAgents.length === 0) return subAgents;
-    const recentTools = liveBlocks
-      .filter(b => b.type === 'tool' && !b.parent_tool_use_id)
-      .slice(-5)
-      .map(b => ({ name: b.name || '', ts: b.startedAt || Date.now(), done: !!b.done, endedAt: b.endedAt }));
-    return subAgents.map(a => {
-      if (a.status === 'working' && (!a.toolActivities || a.toolActivities.length === 0) && recentTools.length > 0) {
-        return { ...a, toolActivities: recentTools };
-      }
-      return a;
-    });
-  }, [subAgents, liveBlocks]);
-
   const bottomRef = useRef(null);
   const scrollRef = useRef(null);
   const [stickToBottom, setStickToBottom] = useState(true);
@@ -120,11 +103,6 @@ export function MessageStream({ projectPath }) {
         {/* Live streaming blocks */}
         {liveBlocks.length > 0 && (
           <AgentMessage live blocks={liveBlocks} />
-        )}
-
-        {/* Sub-agent tree */}
-        {subAgents.length > 0 && (
-          <SubAgentCard agents={enrichedAgents} />
         )}
 
         {/* Permission dialogs from live blocks */}

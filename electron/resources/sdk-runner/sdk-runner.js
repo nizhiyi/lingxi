@@ -21,7 +21,11 @@ function emit(obj) {
 }
 
 import { appendFileSync } from "fs";
-const DEBUG_LOG = process.env.HOME + "/Library/Application Support/lingxi-agent/sdk-runner-debug.log";
+import { join } from "path";
+import { homedir } from "os";
+const DEBUG_LOG = process.platform === "win32"
+  ? join(process.env.APPDATA || homedir(), "lingxi-agent", "sdk-runner-debug.log")
+  : join(process.env.HOME || homedir(), "Library", "Application Support", "lingxi-agent", "sdk-runner-debug.log");
 
 function log(...args) {
   const msg = "[sdk-runner] " + args.join(" ") + "\n";
@@ -164,7 +168,17 @@ async function main() {
       (prompt ? "[用户问题]\n" + prompt : "");
   }
 
-  const isInteractive = config.permissionMode === "interactive";
+  // Permission mode from frontend: "default" | "acceptEdits" | "bypassPermissions" | "plan"
+  const permMode = config.permissionMode || "default";
+  const alwaysAllowSet = new Set(config.alwaysAllowTools || []);
+
+  // Read-only tools that are always safe
+  const readOnlyTools = new Set([
+    "Read", "Grep", "Glob", "LS", "WebFetch", "WebSearch",
+    "Agent", "TodoWrite", "TaskCreate", "TaskUpdate", "TaskGet", "TaskList",
+  ]);
+  // File-edit tools that acceptEdits mode auto-approves
+  const editTools = new Set(["Write", "Edit", "MultiEdit", "NotebookEdit"]);
 
   const options = {
     allowedTools: [
@@ -180,56 +194,80 @@ async function main() {
     fileCheckpointing: true,
   };
 
-  // Always use 'default' permissionMode + canUseTool callback.
-  // AskUserQuestion always blocks to collect user answers via the permission
-  // channel. Other tools: auto-allow in bypass mode, or route through the
-  // permission channel in interactive mode.
+  // Use SDK 'default' permissionMode + canUseTool callback for fine-grained control.
+  // AskUserQuestion always blocks to collect user answers.
+  // Other tools: behavior depends on the selected permission mode.
   options.permissionMode = "default";
   options.canUseTool = async (toolName, input) => {
+    // AskUserQuestion always routes through the permission channel
     if (toolName === "AskUserQuestion") {
       log("AskUserQuestion intercepted, blocking until user answers");
       try {
         const resp = await requestPermission(toolName, input);
         log("AskUserQuestion response:", resp.behavior);
         if (resp.behavior === "allow") {
-          return {
-            behavior: "allow",
-            updatedInput: resp.updatedInput || undefined,
-          };
+          return { behavior: "allow", updatedInput: resp.updatedInput || undefined };
         }
-        return {
-          behavior: "deny",
-          message: resp.message || "User dismissed the question",
-        };
+        return { behavior: "deny", message: resp.message || "User dismissed the question" };
       } catch (e) {
         log("AskUserQuestion error:", e.message);
         return { behavior: "deny", message: "AskUserQuestion timed out: " + e.message };
       }
     }
-    if (isInteractive) {
-      log("canUseTool called:", toolName);
+
+    // "Always Allow" whitelist — user previously chose "Always Allow" for this tool
+    if (alwaysAllowSet.has(toolName)) {
+      log("auto-allow (always-allow whitelist):", toolName);
+      return { behavior: "allow" };
+    }
+
+    // bypassPermissions: auto-approve everything
+    if (permMode === "bypassPermissions") {
+      return { behavior: "allow" };
+    }
+
+    // plan: only read-only tools allowed, deny all writes/executions
+    if (permMode === "plan") {
+      if (readOnlyTools.has(toolName)) {
+        return { behavior: "allow" };
+      }
+      return { behavior: "deny", message: "Plan mode: write/execute operations are disabled" };
+    }
+
+    // acceptEdits: auto-approve read-only + file edits, ask for Bash/Shell
+    if (permMode === "acceptEdits") {
+      if (readOnlyTools.has(toolName) || editTools.has(toolName)) {
+        return { behavior: "allow" };
+      }
+      // Bash/Shell/other risky tools need user confirmation
+      log("canUseTool prompt (acceptEdits):", toolName);
       try {
         const resp = await requestPermission(toolName, input);
         log("permission response:", resp.behavior, "for", toolName);
-        if (resp.behavior === "allow") {
-          return {
-            behavior: "allow",
-            updatedInput: resp.updatedInput || undefined,
-          };
-        } else {
-          return {
-            behavior: "deny",
-            message: resp.message || "User denied this action",
-          };
-        }
+        return resp.behavior === "allow"
+          ? { behavior: "allow", updatedInput: resp.updatedInput || undefined }
+          : { behavior: "deny", message: resp.message || "User denied this action" };
       } catch (e) {
-        log("permission request error:", e.message);
         return { behavior: "deny", message: "Permission request failed: " + e.message };
       }
     }
-    return { behavior: "allow" };
+
+    // default mode: auto-approve read-only tools, ask for everything else
+    if (readOnlyTools.has(toolName)) {
+      return { behavior: "allow" };
+    }
+    log("canUseTool prompt (default):", toolName);
+    try {
+      const resp = await requestPermission(toolName, input);
+      log("permission response:", resp.behavior, "for", toolName);
+      return resp.behavior === "allow"
+        ? { behavior: "allow", updatedInput: resp.updatedInput || undefined }
+        : { behavior: "deny", message: resp.message || "User denied this action" };
+    } catch (e) {
+      return { behavior: "deny", message: "Permission request failed: " + e.message };
+    }
   };
-  log(isInteractive ? "interactive permission mode" : "bypass mode (AskUserQuestion still blocks)");
+  log("permission mode:", permMode, "alwaysAllow:", [...alwaysAllowSet].join(",") || "(none)");
 
   // systemPrompt: 支持字符串（自定义）和对象（preset+append）两种格式
   if (config.systemPrompt) {
@@ -264,7 +302,35 @@ async function main() {
   }
 
   if (config.agents) {
-    options.agents = config.agents;
+    // SDK expects agents as Record<string, AgentDefinition> (dict keyed by name).
+    // Backend sends an array with "name" field — convert to dict format.
+    if (Array.isArray(config.agents)) {
+      const dict = {};
+      for (const a of config.agents) {
+        const name = a.name || `agent-${Object.keys(dict).length}`;
+        const def = { ...a };
+        delete def.name;
+        // SDK docs: "子代理无法生成自己的子代理。不要在子代理的 tools 数组中包含 Agent"
+        if (Array.isArray(def.tools)) {
+          def.tools = def.tools.filter(t => t !== "Agent" && t !== "Task");
+        }
+        if (!def.disallowedTools) def.disallowedTools = [];
+        if (!def.disallowedTools.includes("Agent")) def.disallowedTools.push("Agent");
+        dict[name] = def;
+      }
+      options.agents = dict;
+      log("agents (array→dict):", Object.keys(dict).join(", "));
+    } else {
+      // Object format — still strip Agent from each sub-agent's tools
+      for (const [, def] of Object.entries(config.agents)) {
+        if (Array.isArray(def.tools)) {
+          def.tools = def.tools.filter(t => t !== "Agent" && t !== "Task");
+        }
+        if (!def.disallowedTools) def.disallowedTools = [];
+        if (!def.disallowedTools.includes("Agent")) def.disallowedTools.push("Agent");
+      }
+      options.agents = config.agents;
+    }
   }
 
   // 插件加载：用户可通过配置指定本地 plugin 包路径
