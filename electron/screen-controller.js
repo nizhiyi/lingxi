@@ -24,7 +24,7 @@ function checkRateLimit() {
     const wait = MIN_ACTION_INTERVAL_MS - (now - lastActionTime);
     const { execSync: execS } = require('child_process');
     // 阻塞等待（简单版速率限制）
-    try { execS(`sleep ${wait / 1000}`, { timeout: 2000 }); } catch {}
+    try { execS(`timeout /t ${wait / 1000} /nobreak`, { timeout: 2000 }); } catch {}
   }
   if (actionCount >= MAX_ACTIONS_PER_MINUTE) {
     throw new Error(`速率限制：每分钟最多 ${MAX_ACTIONS_PER_MINUTE} 次操作`);
