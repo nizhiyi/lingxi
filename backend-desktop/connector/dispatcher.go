@@ -195,6 +195,10 @@ func Dispatch(msg IMMessage) {
 					_ = msg.ReplyFunc("抱歉，处理消息时出现错误，请稍后再试。")
 				}
 			}
+			// 流式完成后触发交互卡片（反馈/选择/输入）
+			if streamErr == nil && msg.PostDoneFunc != nil {
+				msg.PostDoneFunc(sessionID, "")
+			}
 			if cfg.SessionMode != SessionModeStateless && scopeKey != "" {
 				db.TouchIMSession(msg.Platform, scopeKey)
 			}
@@ -249,6 +253,11 @@ func Dispatch(msg IMMessage) {
 					slog.Warn("ReplyFunc error", "err", err)
 				}
 			}
+		}
+
+		// 非流式完成后触发交互卡片
+		if msg.PostDoneFunc != nil && finalReply != "" {
+			msg.PostDoneFunc(sessionID, finalReply)
 		}
 
 		if cfg.SessionMode != SessionModeStateless && scopeKey != "" {

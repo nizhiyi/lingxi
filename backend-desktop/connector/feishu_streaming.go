@@ -101,6 +101,11 @@ type feishuStreamSender struct {
 	// 阶段状态：用于格式化不同类型的内容
 	currentPhase string // "thinking" | "tool" | "text" | ""
 
+	// 思考阶段已输出标记（只输出一次提示，不累积思考原文）
+	thinkingEmitted bool
+	// 工具调用阶段已输出标记（tool 进入后输出一次分隔，避免多余空行）
+	toolSectionStarted bool
+
 	pendingFlush  bool
 	flushTimer    *time.Timer
 	flushInterval time.Duration
@@ -144,23 +149,42 @@ func (s *feishuStreamSender) SendAck() {
 	s.mu.Unlock()
 }
 
-// OnStreamCallback 新版多类型流式回调。
-// 飞书卡片只展示正文文本，thinking 和 tool 阶段不输出到卡片内容。
-// thinking 阶段由 SendAck 发送的"💭 正在思考..."文本消息代替。
-// tool 调用完全隐藏，用户只看到最终的回复文本。
+// OnStreamCallback 多类型流式回调。
+// 飞书卡片展示思考提示、工具调用概要和正文文本。
+// - thinking：首次进入思考阶段时追加一行提示，不输出原始思考内容
+// - tool：每次工具调用追加一行简洁标记
+// - text：直接追加正文
+// 所有内容严格前缀扩展，不覆盖已有内容。
 func (s *feishuStreamSender) OnStreamCallback(kind StreamKind, payload string, done bool) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
 	switch kind {
 	case KindThinking:
-		s.currentPhase = "thinking"
-		// thinking 内容不输出到卡片，由 ack 消息("💭 正在思考...")代替
+		if !s.thinkingEmitted {
+			s.thinkingEmitted = true
+			s.pendingAppend += "> 💭 正在分析问题...\n\n"
+			s.currentPhase = "thinking"
+		}
+
 	case KindTool:
 		s.currentPhase = "tool"
-		// tool 调用不输出到卡片，用户不需要看到技术细节
+		// payload 格式为 "🔧 工具名"，直接用引用块展示
+		toolLine := payload
+		if toolLine == "" {
+			toolLine = "🔧 调用工具"
+		}
+		if !s.toolSectionStarted {
+			s.toolSectionStarted = true
+		}
+		s.pendingAppend += "> " + toolLine + "\n"
+
 	case KindText:
 		if payload != "" {
+			// 从非文本阶段首次进入文本阶段时，追加一个空行作为分隔
+			if s.currentPhase != "text" && (s.thinkingEmitted || s.toolSectionStarted) {
+				s.pendingAppend += "\n"
+			}
 			s.currentPhase = "text"
 			s.pendingAppend += payload
 		}
@@ -175,8 +199,8 @@ func (s *feishuStreamSender) OnStreamCallback(kind StreamKind, payload string, d
 		return s.flushLocked()
 	}
 
-	// 只有 text 阶段才初始化卡片和触发 flush
-	if s.currentPhase == "text" && s.pendingAppend != "" {
+	// 有新内容待 flush 时初始化卡片并触发定时 flush
+	if s.pendingAppend != "" {
 		if s.cardID == "" {
 			if err := s.initCard(); err != nil {
 				return err

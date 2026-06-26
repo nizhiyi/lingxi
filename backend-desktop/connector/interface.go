@@ -51,6 +51,9 @@ func DefaultBaseConfig() BaseConfig {
 	}
 }
 
+// InteractiveCardSender 飞书等平台在 AI 回复完成后发送交互卡片（选择/输入/反馈）
+type InteractiveCardSender func(sessionID int64, fullReply string)
+
 // IMMessage 是各平台消息的统一抽象
 type IMMessage struct {
 	Platform       string // "dingtalk" | "feishu" | "wecom"
@@ -70,6 +73,8 @@ type IMMessage struct {
 	// StreamCallback 新版流式回调，支持 thinking/tool/text 多种事件类型。
 	// 优先使用此字段，如果不为 nil 则忽略 StreamReplyFunc。
 	StreamCallback StreamCallback
+	// PostDoneFunc 流式/同步回复完成后触发，用于发送交互卡片（反馈/选择/输入）
+	PostDoneFunc InteractiveCardSender
 }
 
 // Connector 是每个 IM 平台连接器必须实现的接口
