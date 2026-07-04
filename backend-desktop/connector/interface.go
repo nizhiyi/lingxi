@@ -86,6 +86,12 @@ type IMMessage struct {
 	PostDoneFunc InteractiveCardSender
 	// MembersInfo 群成员名单提示（可选），注入到 system prompt，让 AI 知道可以 @mention 谁
 	MembersInfo string
+	// SkipCancel 跳过 activeTasks 打断机制（P2P watcher 已自行通过 channel 串行化，
+	// 无需 Dispatch 层面的打断，否则新消息会取消正在处理的旧消息）
+	SkipCancel bool
+	// ResumeSessionID 如果 > 0，强制使用该 session ID（跳过 GetOrCreateIMSession），
+	// 用于回复链续接上下文：用户回复机器人消息时自动关联到原会话
+	ResumeSessionID int64
 }
 
 // Connector 是每个 IM 平台连接器必须实现的接口

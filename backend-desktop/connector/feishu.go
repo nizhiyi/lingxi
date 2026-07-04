@@ -44,6 +44,17 @@ type chatMembersEntry struct {
 	expire  time.Time
 }
 
+// monitorMsg 监听模式下的待处理消息
+type monitorMsg struct {
+	ctx      context.Context
+	event    *larkim.P2MessageReceiveV1
+	text     string
+	images   []IMImage
+	senderID string
+	chatID   string
+	msgID    string
+}
+
 // FeishuConnector 实现飞书 WebSocket 长连接机器人
 type FeishuConnector struct {
 	cfg          FeishuConfig
@@ -65,6 +76,11 @@ type FeishuConnector struct {
 	// 消息去重：防止飞书 SDK 网络重连后重复推送同一条消息
 	processedMsgsMu sync.Mutex
 	processedMsgs   map[string]time.Time // msgID -> 处理时间
+
+	// 监听模式按 chatID 串行化队列：同一群的监听消息排队处理，
+	// 避免上一条消息的 Agent 还没处理完就被新消息打断
+	monitorQueueMu sync.Mutex
+	monitorQueues  map[string]chan monitorMsg // chatID -> message channel
 }
 
 func (f *FeishuConnector) SetAgentID(id int64)      { f.agentID = id }
@@ -80,6 +96,7 @@ func NewFeishuConnector(configJSON string) (*FeishuConnector, error) {
 		cfg:           cfg,
 		client:        client,
 		processedMsgs: make(map[string]time.Time),
+		monitorQueues: make(map[string]chan monitorMsg),
 	}
 	// 定时清理过期的消息 ID（保留 10 分钟内的）
 	go func() {
@@ -117,6 +134,39 @@ func (f *FeishuConnector) cleanProcessedMsgs() {
 	}
 }
 
+// enqueueMonitorMessage 将监听消息放入对应 chatID 的串行化队列。
+// 如果该 chatID 还没有消费 goroutine，自动启动一个。
+func (f *FeishuConnector) enqueueMonitorMessage(msg monitorMsg) {
+	f.monitorQueueMu.Lock()
+	ch, exists := f.monitorQueues[msg.chatID]
+	if !exists {
+		ch = make(chan monitorMsg, 50)
+		f.monitorQueues[msg.chatID] = ch
+		go f.monitorProcessLoop(msg.chatID, ch)
+	}
+	f.monitorQueueMu.Unlock()
+
+	select {
+	case ch <- msg:
+	default:
+		slog.Warn("[feishu-monitor] queue full, dropping message",
+			"chat_id", msg.chatID, "msg_id", msg.msgID)
+	}
+}
+
+// monitorProcessLoop 串行消费某个 chatID 的监听消息队列。
+// 严格保证同一群同一时间只有一个 Agent 任务在执行，
+// 前一条消息处理完毕后才处理下一条。
+func (f *FeishuConnector) monitorProcessLoop(chatID string, ch <-chan monitorMsg) {
+	slog.Info("[feishu-monitor] process loop started", "chat_id", chatID)
+	for msg := range ch {
+		slog.Info("[feishu-monitor] processing message (serial)",
+			"chat_id", msg.chatID, "msg_id", msg.msgID)
+		f.handleMonitorMessage(msg.ctx, msg.event, msg.text, msg.images, msg.senderID, msg.chatID, msg.msgID)
+	}
+	slog.Info("[feishu-monitor] process loop ended", "chat_id", chatID)
+}
+
 func (f *FeishuConnector) Platform() string { return "feishu" }
 
 func (f *FeishuConnector) Start(ctx context.Context) error {
@@ -144,6 +194,10 @@ func (f *FeishuConnector) Start(ctx context.Context) error {
 		"monitor_enabled", f.cfg.MonitorEnabled,
 		"connector_id", f.connectorID,
 	)
+
+	// 崩溃恢复：恢复活跃的 Agent Teams 任务
+	go f.recoverActiveTasks()
+
 	go func() {
 		<-ctx.Done()
 		// 飞书 SDK 没有显式 Close，依赖 ctx 取消
@@ -154,6 +208,48 @@ func (f *FeishuConnector) Start(ctx context.Context) error {
 func (f *FeishuConnector) Stop() {
 	if f.cancel != nil {
 		f.cancel()
+	}
+}
+
+// recoverActiveTasks 启动时恢复活跃的 Agent Teams 任务
+func (f *FeishuConnector) recoverActiveTasks() {
+	instances, err := db.ListActiveTaskInstances()
+	if err != nil {
+		slog.Warn("[feishu] recover active tasks failed", "err", err)
+		return
+	}
+	if len(instances) == 0 {
+		return
+	}
+
+	slog.Info("[feishu] recovering active tasks", "count", len(instances))
+	for _, inst := range instances {
+		rule, err := db.GetMonitorRule(inst.RuleID)
+		if err != nil {
+			slog.Warn("[feishu] recover task: rule not found", "rule_id", inst.RuleID, "err", err)
+			continue
+		}
+
+		tc := NewTaskCoordinator(f, rule, f.cfg.AppID, f.cfg.AppSecret)
+		instCopy := inst
+		tc.instance = &instCopy
+
+		// 注册到全局路由表
+		if inst.RootMessageID != "" {
+			activeCoordinators.Store(inst.RootMessageID, tc)
+		}
+
+		// 重启全局超时
+		timeoutMin := inst.ReplyTimeoutMinutes
+		if timeoutMin <= 0 {
+			timeoutMin = 10
+		}
+		tc.globalTimeout = time.AfterFunc(time.Duration(timeoutMin)*time.Minute, func() {
+			tc.onGlobalTimeout()
+		})
+
+		slog.Info("[feishu] recovered task coordinator",
+			"id", inst.ID, "root_msg", inst.RootMessageID, "status", inst.Status)
 	}
 }
 
@@ -174,11 +270,36 @@ func (f *FeishuConnector) onMessage(ctx context.Context, event *larkim.P2Message
 	if msgData.MessageId != nil {
 		msgID = *msgData.MessageId
 	}
+	parentMsgID := ""
+	if msgData.ParentId != nil {
+		parentMsgID = *msgData.ParentId
+	}
 
 	// 消息去重：飞书 SDK 可能在网络重连时重复推送同一条消息
 	if f.isDuplicate(msgID) {
 		slog.Info("[feishu] duplicate message, skipping", "msg_id", msgID)
 		return nil
+	}
+
+	// Agent Teams 话题路由：如果消息有 root_id，检查是否有活跃的 TaskCoordinator
+	rootID := ""
+	if msgData.RootId != nil {
+		rootID = *msgData.RootId
+	}
+	if rootID != "" {
+		if tc := LookupCoordinator(rootID); tc != nil {
+			text := extractFeishuText(msgData)
+			senderName := ""
+			if event.Event.Sender != nil && event.Event.Sender.SenderId != nil {
+				senderName = f.getUserName(ctx, *event.Event.Sender.SenderId.OpenId)
+			}
+			mentionBot := f.isFeishuMentionBot(msgData)
+			slog.Info("[feishu] routing thread reply to task coordinator",
+				"root_id", rootID, "sender_id", senderID, "msg_id", msgID,
+				"mention_bot", mentionBot)
+			tc.OnThreadReply(senderID, senderName, text, msgID, mentionBot)
+			return nil
+		}
 	}
 
 	// 解析文本内容
@@ -212,10 +333,20 @@ func (f *FeishuConnector) onMessage(ctx context.Context, event *larkim.P2Message
 		"monitor_enabled", f.cfg.MonitorEnabled,
 	)
 
-	// 群聊中：只有明确 @机器人 才回复
+	// 回复链续接：如果群聊消息未 @bot 但回复了 bot 的消息，视为续接对话（走 @bot 路径）
+	isReplyToBot := false
+	if chatType == "group" && !isMentionBot && parentMsgID != "" {
+		if sid := db.LookupSessionByReplyMsgID(parentMsgID); sid > 0 {
+			isReplyToBot = true
+			slog.Info("[feishu] reply-to-bot detected in group (no @), treating as @bot",
+				"parent_msg_id", parentMsgID, "session_id", sid)
+		}
+	}
+
+	// 群聊中：只有明确 @机器人 或回复 bot 消息才回复
 	// @所有人 的消息交由 Dispatch 中的 ReplyToMentionAll 配置决定（默认不回复）
 	// @其他人 或无 @ 的普通消息一律跳过
-	if chatType == "group" && !isMentionBot {
+	if chatType == "group" && !isMentionBot && !isReplyToBot {
 		// 监听模式：即使未 @机器人，也尝试规则匹配处理（允许空 text，如图片消息）
 		if f.cfg.MonitorEnabled {
 			slog.Info("[feishu] monitor mode: processing group message",
@@ -223,7 +354,15 @@ func (f *FeishuConnector) onMessage(ctx context.Context, event *larkim.P2Message
 			// 监听模式下提前提取并下载图片，透传给 executeAction
 			imageKeys := extractFeishuImageKeys(msgData)
 			images := f.fetchFeishuImages(ctx, msgID, imageKeys)
-			go f.handleMonitorMessage(ctx, event, text, images, senderID, chatID, msgID)
+			f.enqueueMonitorMessage(monitorMsg{
+				ctx:      ctx,
+				event:    event,
+				text:     text,
+				images:   images,
+				senderID: senderID,
+				chatID:   chatID,
+				msgID:    msgID,
+			})
 			return nil
 		}
 
@@ -244,13 +383,24 @@ func (f *FeishuConnector) onMessage(ctx context.Context, event *larkim.P2Message
 	imageKeys := extractFeishuImageKeys(msgData)
 	images := f.fetchFeishuImages(ctx, msgID, imageKeys)
 
-	// 非监听模式下，text 为空且无图片则跳过
+	// text 为空且无图片则跳过（记录日志方便排查）
 	if text == "" && len(images) == 0 {
+		slog.Warn("[feishu] skipping message: empty text and no images",
+			"msg_id", msgID, "chat_id", chatID, "msg_type", msgType,
+			"raw_content", truncateStr(func() string {
+				if msgData.Content != nil { return *msgData.Content }; return "<nil>"
+			}(), 500))
 		return nil
 	}
 
+	// sentReplyMsgID 记录非流式回复时飞书返回的消息 ID（用于回复链映射）
+	var sentReplyMsgID string
 	replyFunc := func(reply string) error {
-		return f.sendReply(ctx, msgID, chatID, reply)
+		rid, err := f.sendReplyReturnID(ctx, msgID, chatID, reply)
+		if err == nil && rid != "" {
+			sentReplyMsgID = rid
+		}
+		return err
 	}
 
 	// 获取会话类型和群名
@@ -273,19 +423,29 @@ func (f *FeishuConnector) onMessage(ctx context.Context, event *larkim.P2Message
 		senderName = f.getUserName(ctx, *event.Event.Sender.SenderId.OpenId)
 	}
 
+	// 回复链续接：如果用户回复了机器人的某条消息，查找对应的 session
+	var resumeSessionID int64
+	if parentMsgID != "" {
+		if sid := db.LookupSessionByReplyMsgID(parentMsgID); sid > 0 {
+			resumeSessionID = sid
+			slog.Info("[feishu] reply-chain context found", "parent_msg_id", parentMsgID, "session_id", sid)
+		}
+	}
+
 	msg := IMMessage{
-		Platform:       "feishu",
-		UserID:         senderID,
-		UserName:       senderName,
-		ConversationID: chatID,
-		ConvTitle:      convTitle,
-		ConvType:       convType,
-		Text:           text,
-		AgentID:        f.agentID,
-		IsMentionAll:   isMentionAll,
-		BaseCfg:        f.cfg.BaseConfig,
-		ReplyFunc:      replyFunc,
-		Images:         images,
+		Platform:        "feishu",
+		UserID:          senderID,
+		UserName:        senderName,
+		ConversationID:  chatID,
+		ConvTitle:       convTitle,
+		ConvType:        convType,
+		Text:            text,
+		AgentID:         f.agentID,
+		IsMentionAll:    isMentionAll,
+		BaseCfg:         f.cfg.BaseConfig,
+		ReplyFunc:       replyFunc,
+		Images:          images,
+		ResumeSessionID: resumeSessionID,
 	}
 
 	// 群聊时获取群成员列表，用于 @mention 和提示词注入
@@ -311,7 +471,6 @@ func (f *FeishuConnector) onMessage(ctx context.Context, event *larkim.P2Message
 
 		sender.SetDoneCallback(func() []map[string]interface{} {
 			var elems []map[string]interface{}
-			fullReply := sender.GetFullTextReply()
 			cardID := sender.GetCardID()
 			if cardID == "" {
 				return elems
@@ -329,27 +488,7 @@ func (f *FeishuConnector) onMessage(ctx context.Context, event *larkim.P2Message
 				Connector: f,
 			}
 
-			// 1. 检测 AI 回复中的 choice 交互块 → 渲染为镭射按钮
-			if title, choices := ParseChoiceBlocks(fullReply); len(choices) > 0 {
-				choiceMap := make(map[string]string)
-				for _, c := range choices {
-					choiceMap[c.Key] = c.Label
-				}
-				cbCtx.Choices = choiceMap
-				elems = append(elems, buildChoiceElements(cardID, title, choices)...)
-			}
-
-			// 2. 检测 AI 回复中的 input 交互块 → 渲染为表单（输入框 + 提交按钮）
-			if title, fields := ParseInputBlocks(fullReply); len(fields) > 0 {
-				elems = append(elems, buildInputElements(cardID, title, fields)...)
-			}
-
-			// 3. 检测 AI 回复中的 checklist/todo 交互块 → 渲染为勾选器
-			if title, items := ParseCheckerBlocks(fullReply); len(items) > 0 {
-				elems = append(elems, buildCheckerElements(cardID, title, items)...)
-			}
-
-			// 4. 始终追加 👍👎 反馈按钮
+			// 追加 👍👎 反馈按钮（不再追加 choice/input/checker 交互元素）
 			elems = append(elems, buildFeedbackElements(cardID)...)
 			RegisterCardCallback(cardID, cbCtx)
 			return elems
@@ -373,6 +512,22 @@ func (f *FeishuConnector) onMessage(ctx context.Context, event *larkim.P2Message
 					ctx.SessionID = sessionID
 					ctx.MessageID = lastMsgID
 				}
+			}
+
+			// 回复链映射：记录流式卡片消息 ID → session ID
+			if replyID := sender.GetReplyMsgID(); replyID != "" && sessionID > 0 {
+				db.SaveReplySessionMapping(replyID, sessionID)
+				slog.Info("[feishu] reply-chain mapping saved (stream)", "reply_msg_id", replyID, "session_id", sessionID)
+			}
+		}
+	}
+
+	// 非流式路径：也需要记录回复链映射
+	if msg.PostDoneFunc == nil {
+		msg.PostDoneFunc = func(sessionID int64, _ string) {
+			if sentReplyMsgID != "" && sessionID > 0 {
+				db.SaveReplySessionMapping(sentReplyMsgID, sessionID)
+				slog.Info("[feishu] reply-chain mapping saved (sync)", "reply_msg_id", sentReplyMsgID, "session_id", sessionID)
 			}
 		}
 	}
@@ -484,29 +639,47 @@ func extractFeishuText(msg *larkim.EventMessage) string {
 	if msg.Content == nil {
 		return ""
 	}
+	rawContent := *msg.Content
 	var content map[string]interface{}
-	if err := json.Unmarshal([]byte(*msg.Content), &content); err != nil {
-		return ""
+	if err := json.Unmarshal([]byte(rawContent), &content); err != nil {
+		slog.Warn("[feishu] extractText unmarshal failed, using raw",
+			"err", err, "raw", truncateStr(rawContent, 200))
+		return rawContent
 	}
+
+	msgType := ""
+	if msg.MessageType != nil {
+		msgType = *msg.MessageType
+	}
+
 	// text 类型消息：{"text":"hello"}
-	if t, ok := content["text"].(string); ok {
+	if t, ok := content["text"].(string); ok && t != "" {
 		return t
 	}
 	// post（富文本）类型消息：从 content 中提取 title + 各段落文本
-	if msg.MessageType != nil && *msg.MessageType == "post" {
+	if msgType == "post" {
 		return extractPostText(content)
 	}
-	// image 类型：返回占位描述（实际图片由 extractFeishuImages 提取填充到 IMMessage.Images）
-	if msg.MessageType != nil && *msg.MessageType == "image" {
+	// image 类型：返回占位描述
+	if msgType == "image" {
 		return "[图片消息]"
 	}
 	// file 类型
-	if msg.MessageType != nil && *msg.MessageType == "file" {
+	if msgType == "file" {
 		if name, ok := content["file_name"].(string); ok {
 			return "[文件: " + name + "]"
 		}
 		return "[文件消息]"
 	}
+
+	// 兜底：尝试 post 解析（有些消息虽然不是 post 类型但有 post 结构）
+	if postText := extractPostText(content); postText != "" {
+		return postText
+	}
+
+	slog.Warn("[feishu] extractText: unrecognized message format",
+		"msg_type", msgType, "content_keys", mapKeys(content),
+		"raw", truncateStr(rawContent, 300))
 	return ""
 }
 
@@ -677,38 +850,78 @@ func (f *FeishuConnector) fetchFeishuImages(ctx context.Context, messageID strin
 // extractPostText 从飞书 post（富文本）消息中提取纯文本
 func extractPostText(content map[string]interface{}) string {
 	var result string
-	// 尝试从各语言版本提取（优先 zh_cn）
-	for _, lang := range []string{"zh_cn", "en_us", "ja_jp"} {
-		langData, ok := content[lang].(map[string]interface{})
-		if !ok {
+	// 优先尝试常见语言，然后遍历所有 key 兜底
+	tried := make(map[string]bool)
+	priorities := []string{"zh_cn", "en_us", "ja_jp"}
+	for _, lang := range priorities {
+		tried[lang] = true
+		if r := extractPostLangText(content, lang); r != "" {
+			return r
+		}
+	}
+	for key := range content {
+		if tried[key] || key == "title" || key == "content" {
 			continue
 		}
-		if title, ok := langData["title"].(string); ok && title != "" {
-			result += title + "\n"
+		if r := extractPostLangText(content, key); r != "" {
+			return r
 		}
-		if contentArr, ok := langData["content"].([]interface{}); ok {
-			for _, para := range contentArr {
-				if paraArr, ok := para.([]interface{}); ok {
-					for _, elem := range paraArr {
-						if elemMap, ok := elem.(map[string]interface{}); ok {
-							if text, ok := elemMap["text"].(string); ok {
-								result += text
-							}
+	}
+
+	// 顶层直接有 title + content 数组的情况（无语言包装）
+	if title, ok := content["title"].(string); ok && title != "" {
+		result += title + "\n"
+	}
+	if contentArr, ok := content["content"].([]interface{}); ok {
+		for _, para := range contentArr {
+			if paraArr, ok := para.([]interface{}); ok {
+				for _, elem := range paraArr {
+					if elemMap, ok := elem.(map[string]interface{}); ok {
+						if text, ok := elemMap["text"].(string); ok {
+							result += text
 						}
 					}
-					result += "\n"
 				}
+				result += "\n"
 			}
 		}
-		if result != "" {
-			break
+	}
+	return strings.TrimSpace(result)
+}
+
+func extractPostLangText(content map[string]interface{}, lang string) string {
+	langData, ok := content[lang].(map[string]interface{})
+	if !ok {
+		return ""
+	}
+	var result string
+	if title, ok := langData["title"].(string); ok && title != "" {
+		result += title + "\n"
+	}
+	if contentArr, ok := langData["content"].([]interface{}); ok {
+		for _, para := range contentArr {
+			if paraArr, ok := para.([]interface{}); ok {
+				for _, elem := range paraArr {
+					if elemMap, ok := elem.(map[string]interface{}); ok {
+						if text, ok := elemMap["text"].(string); ok {
+							result += text
+						}
+					}
+				}
+				result += "\n"
+			}
 		}
 	}
 	return strings.TrimSpace(result)
 }
 
 func (f *FeishuConnector) sendReply(ctx context.Context, msgID, chatID, text string) error {
-	// 替换 @名字 为飞书真实 @mention 格式
+	_, err := f.sendReplyReturnID(ctx, msgID, chatID, text)
+	return err
+}
+
+// sendReplyReturnID 发送回复并返回飞书消息 ID（用于回复链映射）
+func (f *FeishuConnector) sendReplyReturnID(ctx context.Context, msgID, chatID, text string) (string, error) {
 	members := f.getChatMembers(ctx, chatID)
 	text = replaceAtMentions(text, members)
 
@@ -725,12 +938,15 @@ func (f *FeishuConnector) sendReply(ctx context.Context, msgID, chatID, text str
 			Build()
 		resp, err := f.client.Im.Message.Reply(ctx, req)
 		if err != nil {
-			return err
+			return "", err
 		}
 		if !resp.Success() {
-			return fmt.Errorf("feishu reply error: code=%d msg=%s", resp.Code, resp.Msg)
+			return "", fmt.Errorf("feishu reply error: code=%d msg=%s", resp.Code, resp.Msg)
 		}
-		return nil
+		if resp.Data != nil && resp.Data.MessageId != nil {
+			return *resp.Data.MessageId, nil
+		}
+		return "", nil
 	}
 
 	req := larkim.NewCreateMessageReqBuilder().
@@ -743,12 +959,15 @@ func (f *FeishuConnector) sendReply(ctx context.Context, msgID, chatID, text str
 		Build()
 	resp, err := f.client.Im.Message.Create(ctx, req)
 	if err != nil {
-		return err
+		return "", err
 	}
 	if !resp.Success() {
-		return fmt.Errorf("feishu send error: code=%d msg=%s", resp.Code, resp.Msg)
+		return "", fmt.Errorf("feishu send error: code=%d msg=%s", resp.Code, resp.Msg)
 	}
-	return nil
+	if resp.Data != nil && resp.Data.MessageId != nil {
+		return *resp.Data.MessageId, nil
+	}
+	return "", nil
 }
 
 // getChatName 获取飞书群名称，带内存缓存

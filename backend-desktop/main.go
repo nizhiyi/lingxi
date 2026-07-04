@@ -70,6 +70,16 @@ func main() {
 	connector.SetClaudeRunnerCtx(handler.RunClaudeSyncCtx)
 	connector.SetClaudeStreamRunnerCtx(handler.RunClaudeStreamingCtx)
 	connector.SetClaudeStreamRunnerCtxExt(handler.RunClaudeStreamingCtxExt)
+	connector.SetBroadcastFunc(handler.BroadcastWSEvent)
+	connector.RunClaudeForTaskFunc = func(message string, sessionID int64) (string, int64, error) {
+		return handler.RunClaudeSync(message, sessionID, nil)
+	}
+	handler.SetCoordinatorLookup(func(rootMsgID string) interface{ CloseByAPI(reason string) } {
+		if tc := connector.LookupCoordinator(rootMsgID); tc != nil {
+			return tc
+		}
+		return nil
+	})
 	go connector.GlobalManager.LoadFromDB()
 
 	// 健康检查
@@ -197,6 +207,7 @@ func main() {
 	api.DELETE("/im-connectors/:id", handler.DeleteIMConnector)
 	api.POST("/im-connectors/:id/send", handler.SendWebhookMessage)
 	api.POST("/im-connectors/:id/test", handler.TestWebhook)
+	api.POST("/feishu/test-card", handler.TestFeishuCard)
 
 	// IM 看板
 	api.GET("/im-dashboard/sessions", handler.ListIMSessionsHandler)
@@ -212,6 +223,21 @@ func main() {
 	api.PUT("/feishu-monitor/rules/:id/toggle", handler.ToggleMonitorRule)
 	api.GET("/feishu-monitor/logs", handler.ListMonitorLogs)
 	api.GET("/feishu-monitor/chats", handler.ListFeishuChats)
+
+	// 飞书 Agent Teams 任务
+	api.GET("/feishu-tasks", handler.ListFeishuTasks)
+	api.GET("/feishu-tasks/:id", handler.GetFeishuTask)
+	api.POST("/feishu-tasks/:id/close", handler.CloseFeishuTask)
+	api.GET("/feishu-tasks/chat-members", handler.ListChatMembers)
+
+	// P2P 机器人消息监听
+	api.GET("/p2p-watch/targets", handler.ListP2PWatchTargetsHandler)
+	api.POST("/p2p-watch/targets", handler.CreateP2PWatchTargetHandler)
+	api.PUT("/p2p-watch/targets/:id", handler.UpdateP2PWatchTargetHandler)
+	api.DELETE("/p2p-watch/targets/:id", handler.DeleteP2PWatchTargetHandler)
+	api.PUT("/p2p-watch/targets/:id/toggle", handler.ToggleP2PWatchTargetHandler)
+	api.GET("/p2p-watch/status", handler.GetP2PWatchStatusHandler)
+	api.POST("/p2p-watch/test", handler.TestP2PWatchHandler)
 
 	// H5 远程访问
 	api.GET("/h5-access/settings", handler.GetH5AccessSettingsHandler)
@@ -444,6 +470,11 @@ func main() {
 	// 启动文件监控
 	watcher.Start()
 
+	// 启动 P2P 机器人消息监听
+	handler.SetFeishuSendFunc(connector.SendViaFeishu)
+	handler.InitP2PWatcher()
+	handler.StartP2PWatcher()
+
 	// 自动恢复 H5 云端隧道（如果之前已配置并启用）
 	handler.AutoStartH5Tunnel(cfg.Server.Port)
 
@@ -473,6 +504,7 @@ func main() {
 
 	close(backupStop)
 	watcher.Stop()
+	handler.StopP2PWatcher()
 	scheduler.Stop()
 	dream.Stop()
 	nexus.Global.Stop()

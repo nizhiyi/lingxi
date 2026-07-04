@@ -1771,6 +1771,9 @@ func runClaudeWithPaths(sessionID int64, message string, useKB bool, imagePaths 
 		if a, err := db.GetAgent(agentID); err == nil && !a.Builtin && strings.TrimSpace(a.SystemPrompt) != "" {
 			prompt = applyAgentPersona(prompt, a.Name, a.SystemPrompt)
 		}
+		if hint := buildAgentEnvVarsHint(agentID); hint != "" {
+			prompt += hint
+		}
 	}
 	// 长期记忆注入
 	prompt = injectMemories(prompt, agentID)
@@ -1798,6 +1801,7 @@ func runClaudeWithPaths(sessionID int64, message string, useKB bool, imagePaths 
 	claudeBin := cfg.Claude.Bin
 	cmd := exec.Command(claudeBin, args...)
 	cmd.Env = buildClaudeEnv(cfg)
+	cmd.Env = injectAgentEnvVars(cmd.Env, agentID)
 
 	if hasImages {
 		stdinJSON, err := buildStreamJSONStdin(message, imagePaths)
@@ -2907,6 +2911,71 @@ func buildClaudeEnv(cfg *config.Config) []string {
 	return env
 }
 
+// injectAgentEnvVars 从 Agent 配置的 env_vars 字段（JSON object）中提取键值对，
+// 注入到 cmd.Env 环境变量列表中，让技能脚本可以通过环境变量获取 token 等配置。
+func injectAgentEnvVars(env []string, agentID int64) []string {
+	if agentID <= 0 {
+		return env
+	}
+	agent, err := db.GetAgent(agentID)
+	if err != nil || agent == nil || agent.EnvVars == "" || agent.EnvVars == "{}" {
+		return env
+	}
+	var envMap map[string]string
+	if err := json.Unmarshal([]byte(agent.EnvVars), &envMap); err != nil {
+		slog.Warn("[agent-env] parse env_vars failed", "agent_id", agentID, "err", err)
+		return env
+	}
+	for k, v := range envMap {
+		k = strings.TrimSpace(k)
+		v = strings.TrimSpace(v)
+		if k == "" || v == "" {
+			continue
+		}
+		prefix := k + "="
+		found := false
+		for i, e := range env {
+			if strings.HasPrefix(e, prefix) {
+				env[i] = k + "=" + v
+				found = true
+				break
+			}
+		}
+		if !found {
+			env = append(env, k+"="+v)
+		}
+	}
+	slog.Info("[agent-env] injected env_vars", "agent_id", agentID, "count", len(envMap))
+	return env
+}
+
+// buildAgentEnvVarsHint 生成已配置环境变量的提示文本，注入 system prompt。
+// 只显示变量名（不显示值），让 AI 知道可以在 Bash 中通过 $VAR_NAME 使用这些变量。
+func buildAgentEnvVarsHint(agentID int64) string {
+	if agentID <= 0 {
+		return ""
+	}
+	agent, err := db.GetAgent(agentID)
+	if err != nil || agent == nil || agent.EnvVars == "" || agent.EnvVars == "{}" {
+		return ""
+	}
+	var envMap map[string]string
+	if err := json.Unmarshal([]byte(agent.EnvVars), &envMap); err != nil {
+		return ""
+	}
+	var names []string
+	for k := range envMap {
+		k = strings.TrimSpace(k)
+		if k != "" {
+			names = append(names, "$"+k)
+		}
+	}
+	if len(names) == 0 {
+		return ""
+	}
+	return fmt.Sprintf("\n\n【已配置环境变量】\n以下环境变量已预注入到你的执行环境中，可直接在 Bash 命令中使用（无需手动 export）：\n%s\n", strings.Join(names, "、"))
+}
+
 func writeSSE(c *gin.Context, event, data string) {
 	fmt.Fprintf(c.Writer, "event: %s\ndata: %s\n\n", event, data)
 	c.Writer.Flush()
@@ -2953,6 +3022,9 @@ func RunClaudeSync(message string, sessionID int64, imagePaths []string) (reply 
 		if a, err := db.GetAgent(agentID); err == nil && !a.Builtin && strings.TrimSpace(a.SystemPrompt) != "" {
 			prompt = applyAgentPersona(prompt, a.Name, a.SystemPrompt)
 		}
+		if hint := buildAgentEnvVarsHint(agentID); hint != "" {
+			prompt += hint
+		}
 	}
 	// 长期记忆注入
 	prompt = injectMemories(prompt, agentID)
@@ -2970,6 +3042,7 @@ func RunClaudeSync(message string, sessionID int64, imagePaths []string) (reply 
 	claudeBin := cfg.Claude.Bin
 	cmd := exec.Command(claudeBin, args...)
 	cmd.Env = buildClaudeEnv(cfg)
+	cmd.Env = injectAgentEnvVars(cmd.Env, agentID)
 
 	if hasImages {
 		stdinJSON, e := buildStreamJSONStdin(message, imagePaths)
@@ -3158,6 +3231,9 @@ func RunClaudeStreaming(message string, sessionID int64, imagePaths []string, on
 		if a, err := db.GetAgent(agentID); err == nil && !a.Builtin && strings.TrimSpace(a.SystemPrompt) != "" {
 			prompt = applyAgentPersona(prompt, a.Name, a.SystemPrompt)
 		}
+		if hint := buildAgentEnvVarsHint(agentID); hint != "" {
+			prompt += hint
+		}
 	}
 	// 长期记忆注入
 	prompt = injectMemories(prompt, agentID)
@@ -3175,6 +3251,7 @@ func RunClaudeStreaming(message string, sessionID int64, imagePaths []string, on
 	claudeBin := cfg.Claude.Bin
 	cmd := exec.Command(claudeBin, args...)
 	cmd.Env = buildClaudeEnv(cfg)
+	cmd.Env = injectAgentEnvVars(cmd.Env, agentID)
 
 	if hasImages {
 		stdinJSON, e := buildStreamJSONStdin(message, imagePaths)
@@ -3359,6 +3436,9 @@ func RunClaudeSyncCtx(ctx context.Context, message string, sessionID int64, imag
 		if a, err := db.GetAgent(agentID); err == nil && !a.Builtin && strings.TrimSpace(a.SystemPrompt) != "" {
 			prompt = applyAgentPersona(prompt, a.Name, a.SystemPrompt)
 		}
+		if hint := buildAgentEnvVarsHint(agentID); hint != "" {
+			prompt += hint
+		}
 	}
 	// 长期记忆注入
 	prompt = injectMemories(prompt, agentID)
@@ -3379,6 +3459,7 @@ func RunClaudeSyncCtx(ctx context.Context, message string, sessionID int64, imag
 	claudeBin := cfg.Claude.Bin
 	cmd := exec.CommandContext(ctx, claudeBin, args...)
 	cmd.Env = buildClaudeEnv(cfg)
+	cmd.Env = injectAgentEnvVars(cmd.Env, agentID)
 
 	if hasImages {
 		stdinJSON, e := buildStreamJSONStdin(message, imagePaths)
@@ -3534,6 +3615,9 @@ func RunClaudeStreamingCtx(ctx context.Context, message string, sessionID int64,
 		if a, err := db.GetAgent(agentID); err == nil && !a.Builtin && strings.TrimSpace(a.SystemPrompt) != "" {
 			prompt = applyAgentPersona(prompt, a.Name, a.SystemPrompt)
 		}
+		if hint := buildAgentEnvVarsHint(agentID); hint != "" {
+			prompt += hint
+		}
 	}
 	// 长期记忆注入
 	prompt = injectMemories(prompt, agentID)
@@ -3554,6 +3638,7 @@ func RunClaudeStreamingCtx(ctx context.Context, message string, sessionID int64,
 	claudeBin := cfg.Claude.Bin
 	cmd := exec.CommandContext(ctx, claudeBin, args...)
 	cmd.Env = buildClaudeEnv(cfg)
+	cmd.Env = injectAgentEnvVars(cmd.Env, agentID)
 
 	if hasImages {
 		stdinJSON, e := buildStreamJSONStdin(message, imagePaths)

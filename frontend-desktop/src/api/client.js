@@ -342,6 +342,21 @@ export const api = {
   toggleMonitorRule: (id) => req('PUT', `/api/feishu-monitor/rules/${id}/toggle`),
   listMonitorLogs: (connectorId, limit) => req('GET', `/api/feishu-monitor/logs?connector_id=${connectorId}&limit=${limit || 50}`),
   listFeishuChats: (connectorId) => req('GET', `/api/feishu-monitor/chats?connector_id=${connectorId}`),
+
+  // 飞书 Agent Teams 任务
+  listFeishuTasks: (connectorId, status) => req('GET', `/api/feishu-tasks?connector_id=${connectorId}${status ? `&status=${status}` : ''}`),
+  getFeishuTask: (id) => req('GET', `/api/feishu-tasks/${id}`),
+  closeFeishuTask: (id) => req('POST', `/api/feishu-tasks/${id}/close`),
+  listChatMembers: (connectorId, chatId) => req('GET', `/api/feishu-tasks/chat-members?connector_id=${connectorId}&chat_id=${chatId}`),
+
+  // P2P 机器人消息监听
+  listP2PWatchTargets: (connectorId) => req('GET', `/api/p2p-watch/targets?connector_id=${connectorId || 0}`),
+  createP2PWatchTarget: (data) => req('POST', '/api/p2p-watch/targets', data),
+  updateP2PWatchTarget: (id, data) => req('PUT', `/api/p2p-watch/targets/${id}`, data),
+  deleteP2PWatchTarget: (id) => req('DELETE', `/api/p2p-watch/targets/${id}`),
+  toggleP2PWatchTarget: (id) => req('PUT', `/api/p2p-watch/targets/${id}/toggle`),
+  getP2PWatchStatus: () => req('GET', '/api/p2p-watch/status'),
+  testP2PPoll: (chatId) => req('POST', '/api/p2p-watch/test', { chat_id: chatId }),
 };
 
 // ─── 灵犀社区平台 API ────────────────────────────────────────────────

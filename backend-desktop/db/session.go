@@ -108,3 +108,25 @@ func GetSessionPermissionMode(sessionID int64) string {
 	}
 	return mode
 }
+
+// SaveReplySessionMapping 记录机器人回复消息 ID → session ID 的映射，用于回复链续接上下文
+func SaveReplySessionMapping(platformMsgID string, sessionID int64) {
+	if platformMsgID == "" || sessionID <= 0 {
+		return
+	}
+	DB.Exec(`INSERT OR REPLACE INTO im_reply_sessions (platform_msg_id, session_id) VALUES (?, ?)`,
+		platformMsgID, sessionID)
+}
+
+// LookupSessionByReplyMsgID 根据被回复消息的飞书 msg_id 查找对应的 session ID
+func LookupSessionByReplyMsgID(platformMsgID string) int64 {
+	if platformMsgID == "" {
+		return 0
+	}
+	var sid int64
+	err := DB.QueryRow(`SELECT session_id FROM im_reply_sessions WHERE platform_msg_id=?`, platformMsgID).Scan(&sid)
+	if err != nil {
+		return 0
+	}
+	return sid
+}

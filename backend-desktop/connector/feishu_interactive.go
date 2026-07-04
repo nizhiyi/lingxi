@@ -420,6 +420,7 @@ func ParseInputBlocks(text string) (title string, fields []InputField) {
 			Type   string `json:"type"`
 			Title  string `json:"title"`
 			Fields []struct {
+				ID          string `json:"id"`
 				Key         string `json:"key"`
 				Label       string `json:"label"`
 				Placeholder string `json:"placeholder"`
@@ -435,6 +436,9 @@ func ParseInputBlocks(text string) (title string, fields []InputField) {
 		title = block.Title
 		for _, f := range block.Fields {
 			key := f.Key
+			if key == "" {
+				key = f.ID
+			}
 			if key == "" {
 				key = f.Label
 			}
@@ -491,12 +495,12 @@ func buildInputElements(cardID, title string, fields []InputField) []map[string]
 				"width": "auto",
 				"elements": []map[string]interface{}{
 					{
-						"tag":         "button",
-						"type":        "primary",
-						"size":        "medium",
-						"text":        map[string]interface{}{"tag": "plain_text", "content": "提交"},
-						"action_type": "form_submit",
-						"name":        "btn_submit",
+						"tag":              "button",
+						"type":             "primary",
+						"size":             "medium",
+						"text":             map[string]interface{}{"tag": "plain_text", "content": "提交"},
+						"form_action_type": "submit",
+						"name":             "btn_submit",
 						"behaviors": []map[string]interface{}{
 							{
 								"type": "callback",
@@ -514,12 +518,12 @@ func buildInputElements(cardID, title string, fields []InputField) []map[string]
 				"width": "auto",
 				"elements": []map[string]interface{}{
 					{
-						"tag":         "button",
-						"type":        "default",
-						"size":        "medium",
-						"text":        map[string]interface{}{"tag": "plain_text", "content": "重置"},
-						"action_type": "form_reset",
-						"name":        "btn_reset",
+						"tag":              "button",
+						"type":             "default",
+						"size":             "medium",
+						"text":             map[string]interface{}{"tag": "plain_text", "content": "重置"},
+						"form_action_type": "reset",
+						"name":             "btn_reset",
 					},
 				},
 			},
@@ -782,6 +786,13 @@ func (s *feishuStreamSender) GetCardID() string {
 	return s.cardID
 }
 
+// GetReplyMsgID 获取卡片消息在飞书中的 message_id（用于回复链映射）
+func (s *feishuStreamSender) GetReplyMsgID() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.replyMsgID
+}
+
 // ── HTTP 工具函数 ─────────────────────────────────────────────
 
 func doHTTPRequest(method, urlStr, token string, body []byte) error {
@@ -795,9 +806,23 @@ func doHTTPRequest(method, urlStr, token string, body []byte) error {
 	}
 	defer resp.Body.Close()
 
+	respBody, _ := io.ReadAll(resp.Body)
+
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		respBody, _ := io.ReadAll(resp.Body)
 		return fmt.Errorf("HTTP %d: %s", resp.StatusCode, string(respBody))
+	}
+
+	// 飞书 API 可能返回 200 但 code != 0
+	var result struct {
+		Code int    `json:"code"`
+		Msg  string `json:"msg"`
+	}
+	if json.Unmarshal(respBody, &result) == nil && result.Code != 0 {
+		slog.Warn("[feishu-api] request returned error code",
+			"method", method, "url", urlStr,
+			"code", result.Code, "msg", result.Msg,
+			"bodyLen", len(body))
+		return fmt.Errorf("feishu API code=%d: %s", result.Code, result.Msg)
 	}
 	return nil
 }

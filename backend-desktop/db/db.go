@@ -374,6 +374,8 @@ func migrate() {
 	// 列级迁移：im_connectors 多实例支持
 	addColumnIfMissing("im_connectors", "name", "TEXT NOT NULL DEFAULT ''")
 	addColumnIfMissing("im_connectors", "agent_id", "INTEGER NOT NULL DEFAULT 0")
+	// 监听规则：回复前缀模板（可配置 Agent 回复时的开头引导语）
+	addColumnIfMissing("feishu_monitor_rules", "reply_prefix", "TEXT NOT NULL DEFAULT ''")
 	// 移除旧的 platform 唯一索引（如果存在），允许同平台多实例
 	DB.Exec(`DROP INDEX IF EXISTS sqlite_autoindex_im_connectors_1`)
 
@@ -616,6 +618,96 @@ func migrate() {
 	if v < 8 {
 		migrateSecretsToAESGCM()
 		recordMigration(8, "encrypt secrets – AES-GCM encrypt im_connectors.config, oauth_configs.app_secret, kv push_secret")
+	}
+	if v < 9 {
+		DB.Exec(`CREATE TABLE IF NOT EXISTS p2p_watch_targets (
+			id                INTEGER PRIMARY KEY AUTOINCREMENT,
+			connector_id      INTEGER NOT NULL DEFAULT 0,
+			chat_id           TEXT    NOT NULL DEFAULT '',
+			chat_name         TEXT    NOT NULL DEFAULT '',
+			enabled           INTEGER NOT NULL DEFAULT 1,
+			poll_interval_sec INTEGER NOT NULL DEFAULT 20,
+			last_seen_msg_id  TEXT    NOT NULL DEFAULT '',
+			created_at        DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+			updated_at        DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+		)`)
+		recordMigration(9, "p2p_watch_targets – P2P bot message monitoring targets")
+	}
+	if v < 10 {
+		addColumnIfMissing("agents", "env_vars", `TEXT NOT NULL DEFAULT '{}'`)
+		recordMigration(10, "agents.env_vars – runtime environment variables for skill scripts")
+	}
+	if v < 11 {
+		DB.Exec(`CREATE TABLE IF NOT EXISTS im_reply_sessions (
+			id               INTEGER PRIMARY KEY AUTOINCREMENT,
+			platform_msg_id  TEXT    NOT NULL UNIQUE,
+			session_id       INTEGER NOT NULL,
+			created_at       DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+		)`)
+		DB.Exec(`CREATE INDEX IF NOT EXISTS idx_im_reply_sessions_msg ON im_reply_sessions(platform_msg_id)`)
+		recordMigration(11, "im_reply_sessions – map bot reply msg_id to session_id for reply-chain context")
+	}
+	if v < 12 {
+		DB.Exec(`CREATE TABLE IF NOT EXISTS feishu_task_instances (
+			id                     INTEGER PRIMARY KEY AUTOINCREMENT,
+			rule_id                INTEGER NOT NULL DEFAULT 0,
+			connector_id           INTEGER NOT NULL DEFAULT 0,
+			source_chat_id         TEXT    NOT NULL DEFAULT '',
+			target_chat_id         TEXT    NOT NULL DEFAULT '',
+			trigger_msg_id         TEXT    NOT NULL DEFAULT '',
+			trigger_content        TEXT    NOT NULL DEFAULT '',
+			trigger_sender_id      TEXT    NOT NULL DEFAULT '',
+			trigger_sender_name    TEXT    NOT NULL DEFAULT '',
+			root_message_id        TEXT    NOT NULL DEFAULT '',
+			thread_id              TEXT    NOT NULL DEFAULT '',
+			streaming_card_id      TEXT    NOT NULL DEFAULT '',
+			streaming_element_id   TEXT    NOT NULL DEFAULT 'stream_md_01',
+			streaming_sequence     INTEGER NOT NULL DEFAULT 0,
+			progress_msg_id        TEXT    NOT NULL DEFAULT '',
+			status                 TEXT    NOT NULL DEFAULT 'CREATED',
+			dispatch_targets       TEXT    NOT NULL DEFAULT '[]',
+			dispatch_history       TEXT    NOT NULL DEFAULT '{"rounds":[]}',
+			accumulated_context    TEXT    NOT NULL DEFAULT '',
+			current_round          INTEGER NOT NULL DEFAULT 0,
+			max_rounds             INTEGER NOT NULL DEFAULT 10,
+			reply_timeout_minutes  INTEGER NOT NULL DEFAULT 10,
+			reply_debounce_seconds INTEGER NOT NULL DEFAULT 30,
+			error_msg              TEXT    NOT NULL DEFAULT '',
+			created_at             DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+			updated_at             DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+		)`)
+		DB.Exec(`CREATE INDEX IF NOT EXISTS idx_feishu_task_root_msg ON feishu_task_instances(root_message_id)`)
+		DB.Exec(`CREATE INDEX IF NOT EXISTS idx_feishu_task_thread ON feishu_task_instances(thread_id)`)
+		DB.Exec(`CREATE INDEX IF NOT EXISTS idx_feishu_task_status ON feishu_task_instances(status)`)
+		addColumnIfMissing("feishu_monitor_rules", "target_chat_id", "TEXT NOT NULL DEFAULT ''")
+		addColumnIfMissing("feishu_monitor_rules", "dispatch_targets", "TEXT NOT NULL DEFAULT '[]'")
+		addColumnIfMissing("feishu_monitor_rules", "completion_strategy", "TEXT NOT NULL DEFAULT 'debounce'")
+		addColumnIfMissing("feishu_monitor_rules", "max_rounds", "INTEGER NOT NULL DEFAULT 10")
+		addColumnIfMissing("feishu_monitor_rules", "reply_timeout_minutes", "INTEGER NOT NULL DEFAULT 10")
+		addColumnIfMissing("feishu_monitor_rules", "reply_debounce_seconds", "INTEGER NOT NULL DEFAULT 30")
+		recordMigration(12, "feishu_task_instances table + feishu_monitor_rules agent_teams columns")
+	}
+
+	if v < 13 {
+		// 重建 im_connectors 表去掉 platform 列的 UNIQUE 约束，允许同平台多实例
+		_, err := DB.Exec(`
+			CREATE TABLE IF NOT EXISTS im_connectors_new (
+				id         INTEGER PRIMARY KEY AUTOINCREMENT,
+				name       TEXT    NOT NULL DEFAULT '',
+				platform   TEXT    NOT NULL,
+				agent_id   INTEGER NOT NULL DEFAULT 0,
+				enabled    INTEGER NOT NULL DEFAULT 0,
+				config     TEXT    NOT NULL DEFAULT '{}',
+				created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+				updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+			)`)
+		if err == nil {
+			DB.Exec(`INSERT INTO im_connectors_new (id, name, platform, agent_id, enabled, config, created_at, updated_at)
+				SELECT id, name, platform, agent_id, enabled, config, created_at, updated_at FROM im_connectors`)
+			DB.Exec(`DROP TABLE im_connectors`)
+			DB.Exec(`ALTER TABLE im_connectors_new RENAME TO im_connectors`)
+		}
+		recordMigration(13, "im_connectors remove platform UNIQUE constraint – allow multiple connectors per platform")
 	}
 }
 

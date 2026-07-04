@@ -64,6 +64,7 @@ lingxi-agent/
 │   │   ├── auth.go           # 用户/OAuth 配置 CRUD
 │   │   ├── im_connector.go   # IM 连接器 CRUD
 │   │   ├── feishu_monitor.go # 飞书监听模式规则 + 日志 CRUD
+│   │   ├── task_instance.go  # 飞书 Agent Teams 任务实例 CRUD
 │   │   ├── evolution.go      # 自我进化日志 CRUD + InsertMemory
 │   │   ├── nexus.go          # Nexus 表 CRUD（peers/contacts/a2a）
 │   │   ├── group_chat.go     # 群聊 CRUD（group_chats/group_members/group_messages，含微信风扩展列）
@@ -85,6 +86,7 @@ lingxi-agent/
 │   │   ├── usage.go          # 用量统计
 │   │   ├── im_connector.go   # IM 连接器
 │   │   ├── feishu_monitor.go # 飞书监听模式规则 CRUD + 日志 + 群列表 API
+│   │   ├── feishu_task.go    # 飞书 Agent Teams 任务 API（列表/详情/关闭/群成员）
 │   │   ├── scheduled.go      # 定时任务 CRUD
 │   │   ├── auth.go           # SSO 登录（OAuth code 换 token + 游客登录）
 │   │   ├── nexus.go          # Nexus 对外 API + 设置 + WAN API
@@ -114,7 +116,7 @@ lingxi-agent/
 │   │   ├── tasks.go          # 后台任务列表 + 删除
 │   │   ├── router_status.go  # 路由器状态查询
 │   │   └── ws_hub.go         # WebSocket Hub
-│   ├── connector/            # IM 平台对接（企微/钉钉/飞书，飞书支持流式卡片消息 + 监听模式）
+│   ├── connector/            # IM 平台对接（企微/钉钉/飞书，飞书支持流式卡片消息 + 监听模式 + Agent Teams 任务协调）
 │   ├── model/                # 数据模型
 │   ├── nexus/                # Agent 间对话引擎（无 Token 认证，无联系人机制）
 │   │   ├── discovery.go      # mDNS 发现服务 + 广域网信令客户端启动
@@ -447,6 +449,10 @@ flutter build apk --debug      # Debug APK (~200MB)
 | PUT | /api/feishu-monitor/rules/:id/toggle | ToggleMonitorRule | 启用/禁用监听规则 |
 | GET | /api/feishu-monitor/logs | ListMonitorLogs | 飞书监听日志列表 |
 | GET | /api/feishu-monitor/chats | ListFeishuChats | 获取机器人所在的群列表 |
+| GET | /api/feishu-tasks | ListFeishuTasks | 飞书 Agent Teams 任务列表（支持 status 筛选） |
+| GET | /api/feishu-tasks/:id | GetFeishuTask | 任务实例详情 |
+| POST | /api/feishu-tasks/:id/close | CloseFeishuTask | 手动关闭任务 |
+| GET | /api/feishu-tasks/chat-members | ListChatMembers | 获取指定群的成员列表（含机器人） |
 | GET | /api/providers | ListProviders | 供应商列表 |
 | GET | /api/usage | GetUsage | 用量查询 |
 | GET | /api/usage/quota | GetUsageQuota | 额度查询 |
@@ -1214,3 +1220,26 @@ xattr -cr "/Applications/灵犀.app"
 - **前端 UI**：IMConnectorPage 飞书连接器卡片新增「监听模式配置」折叠面板（规则管理 + 监听日志两个 tab）
 - **消息发送**：`sendToChat` / `sendToUser` 方法（飞书 `client.Im.Message.Create` API）
 - **connectorID 传播**：`connector.Manager.StartWithAgentAndID` 启动时注入 `im_connectors.id`
+
+### 飞书监听消息串行化 + 流式卡片美化（v2026-07 Phase 34）
+- **监听消息按 chatID 串行化**：`FeishuConnector` 新增 `monitorQueues map[string]chan monitorMsg` 按群 ID 串行化队列 + `monitorProcessLoop` 消费协程，同一群的监听消息严格排队处理，前一条 Agent 任务完成后才处理下一条，解决多条消息并发导致 Agent 回复互相打断的问题
+- **executeAction 阻塞等待**：通过 `doneCh` channel + `PostDoneFunc` 回调实现 `executeAction` 阻塞直到 Agent 处理完毕（5 分钟超时），`SkipCancel: true` 避免 Dispatch 层打断正在执行的任务
+- **流式工具摘要覆盖式更新**：流式过程中工具调用不再逐行追加 `> 🔧 ToolName`，改为实时覆盖单行聚合摘要（如 `> 🔧 执行中：Bash ×3 · Read`），pendingAppend 中的工具行可自由覆盖
+- **心跳覆盖式更新**：心跳不再追加新行 `> ⏳ 仍在处理中...`，改为更新工具摘要行末尾的 ⏳ 后缀（工具阶段），非工具阶段才追加独立心跳行
+- **工具行冻结机制**：工具阶段结束时将"执行中"替换为"✅"并冻结，text 阶段用 `---` 分隔线与正文区分
+- **最终卡片工具折叠面板**：`replaceCardFinal` 新增 `collapsible_panel` element（位于思考面板和正文之间），标题显示 `🔧 执行了 N 次工具调用`，展开后显示工具名聚合摘要，默认折叠
+- **最终卡片纯净正文**：`removeToolMarkerLines` 增强，移除所有流式标记行（🔧/💭/⏳/---），最终卡片正文只保留 AI 回复原文
+- **Agent 环境变量名称注入 system prompt**：`buildAgentEnvVarsHint` 自动将智能体已配置的环境变量名称（不含值）追加到 system prompt，让 AI 知道可以在 Bash 命令中直接使用 `$VAR_NAME`，解决 AI 报告"环境变量未配置"的问题
+- **回复链续接上下文**：用户回复机器人消息（飞书引用回复）时自动复用原会话 session，支持多轮追问；`im_reply_sessions` SQLite 表持久化映射（机器人消息 ID → session ID），流式和非流式回复均自动记录；`IMMessage.ResumeSessionID` 字段让 `Dispatch` 跳过新建 session 直接复用；群聊中回复 bot 消息且未 @bot 时也视为续接（`isReplyToBot` 检测）；回复链可无限嵌套（每层 bot 回复都追加映射，指向同一 session）
+
+### 飞书 Agent Teams 多 Agent 任务协调（v2026-07 Phase 35）
+- **feishu_task_instances 表**：任务协调实例持久化（状态机：CREATED→ACCEPTED→DISPATCHED→MONITORING→DONE + dispatch_history/accumulated_context/current_round/max_rounds/reply_timeout_minutes/reply_debounce_seconds）
+- **FeishuMonitorRule 扩展**：新增 target_chat_id/dispatch_targets/completion_strategy/max_rounds/reply_timeout_minutes/reply_debounce_seconds 字段，支持 Agent Teams 模式配置
+- **飞书卡片构建器**：`connector/feishu_task_cards.go` 提供主任务卡片（橙→蓝→绿状态色）、流式思考卡片、进度卡片、分发 @mention 文本 + 详情卡片
+- **TaskCoordinator 核心引擎**：`connector/feishu_task_coordinator.go` goroutine 管理任务全生命周期——初始分析（流式思考卡片）→ 并行分发（@mention 文本 + 详情卡片）→ 防抖回复等待（configurable debounce_seconds）→ LLM 完成判断 → 主卡片状态 PATCH → 多轮迭代（max_rounds）
+- **话题路由**：`feishu.go` onMessage() 新增 RootId 路由，话题回复自动分发到活跃 TaskCoordinator
+- **监听规则挂钩**：`feishu_monitor.go` executeAction 新增 agent_teams 分支，匹配规则时启动 TaskCoordinator goroutine
+- **LLM 注入**：`RunClaudeForTaskFunc` 由 main.go 注入 `handler.RunClaudeSync`，协调器用于初始分析和完成判断
+- **崩溃恢复**：`recoverActiveTasks()` 启动时查询 DB 活跃任务实例，重建 coordinator 并注册到全局路由表
+- **HTTP API**：`handler/feishu_task.go` 提供 GET /api/feishu-tasks（列表+状态筛选）、GET /:id（详情）、POST /:id/close（手动关闭）、GET /chat-members（群成员列表）
+- **前端 UI**：IMConnectorPage 新增 agent_teams 动作类型 + 目标群选择器 + 群成员角色配置（点击选中/取消 + 自定义角色名）+ 防抖/超时/轮次参数配置面板

@@ -3,7 +3,7 @@ import { motion, AnimatePresence } from 'framer-motion';
 import {
   Sparkles, Plus, Trash2, Edit3, Bot, Brain, BookOpen, Plug,
   ArrowLeft, Wand2, Check, X, Shield, LayoutGrid, Download, Upload, Globe,
-  Zap, History, ChevronDown, ChevronUp, ImagePlus, FlaskConical,
+  Zap, History, ChevronDown, ChevronUp, ImagePlus, FlaskConical, KeyRound,
 } from 'lucide-react';
 import { cn } from './ui/cn';
 import { api } from './api/client';
@@ -80,6 +80,7 @@ const EMPTY = {
   temperature: 0,
   max_tokens: 0,
   post_actions: '[]',
+  env_vars: '{}',
 };
 
 export default function AgentFactoryPage({ onBack }) {
@@ -365,6 +366,7 @@ function AgentEditor({ open, value, onClose, onSave, onPickDistillRecord }) {
         temperature: value.temperature ?? 0,
         max_tokens: value.max_tokens ?? 0,
         post_actions: value.post_actions || '[]',
+        env_vars: value.env_vars || '{}',
       });
       setStep(0);
     }
@@ -584,6 +586,9 @@ function AgentEditor({ open, value, onClose, onSave, onPickDistillRecord }) {
                 </div>
               </Field>
             </div>
+            {/* 运行时环境变量 */}
+            <EnvVarsEditor envVars={form.env_vars} onChange={(v) => set('env_vars', v)} />
+
             {form.id > 0 && <PersonalityEditor agentId={form.id} />}
             {!form.id && (
               <div className="text-[11px] text-[color:var(--text-faint)] p-2 rounded bg-[color:var(--bg-soft)]">
@@ -735,6 +740,87 @@ function ChipInput({ value, onChange, placeholder }) {
           placeholder={placeholder} />
         <Button size="sm" variant="outline" onClick={add}><Plus size={12} /> 添加</Button>
       </div>
+    </div>
+  );
+}
+
+function EnvVarsEditor({ envVars, onChange }) {
+  const [expanded, setExpanded] = useState(false);
+  const parsed = useMemo(() => {
+    try { return JSON.parse(envVars || '{}'); } catch { return {}; }
+  }, [envVars]);
+  const entries = Object.entries(parsed);
+
+  const update = (newMap) => onChange(JSON.stringify(newMap));
+
+  const addEntry = () => {
+    const newMap = { ...parsed, '': '' };
+    update(newMap);
+    setExpanded(true);
+  };
+
+  const removeEntry = (key) => {
+    const newMap = { ...parsed };
+    delete newMap[key];
+    update(newMap);
+  };
+
+  const changeKey = (oldKey, newKey) => {
+    const newMap = {};
+    for (const [k, v] of Object.entries(parsed)) {
+      newMap[k === oldKey ? newKey : k] = v;
+    }
+    update(newMap);
+  };
+
+  const changeValue = (key, newVal) => {
+    update({ ...parsed, [key]: newVal });
+  };
+
+  return (
+    <div className="border border-[color:var(--line)] rounded-lg overflow-hidden">
+      <button
+        type="button"
+        onClick={() => setExpanded(!expanded)}
+        className="w-full flex items-center gap-2 px-3 py-2 text-sm font-medium text-[color:var(--text)] hover:bg-[color:var(--bg-soft)] transition-colors"
+      >
+        <KeyRound size={14} className="text-[color:var(--accent)]" />
+        <span>运行时环境变量</span>
+        {entries.length > 0 && <Badge tone="default" className="ml-1">{entries.length}</Badge>}
+        <span className="flex-1" />
+        {expanded ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
+      </button>
+      {expanded && (
+        <div className="px-3 pb-3 space-y-2">
+          <p className="text-[11px] text-[color:var(--text-faint)]">
+            Agent 执行技能/工具时自动注入这些环境变量（如 API Token、密钥等）
+          </p>
+          {entries.map(([key, value], i) => (
+            <div key={i} className="flex gap-2 items-center">
+              <Input
+                className="flex-1 font-mono text-xs"
+                placeholder="变量名 (如 OMNIBUS_ACCESS_TOKEN)"
+                value={key}
+                onChange={(e) => changeKey(key, e.target.value)}
+              />
+              <Input
+                className="flex-[2] font-mono text-xs"
+                placeholder="值"
+                value={value}
+                type="password"
+                onChange={(e) => changeValue(key, e.target.value)}
+              />
+              <button type="button" onClick={() => removeEntry(key)}
+                className="p-1 text-[color:var(--text-faint)] hover:text-red-500">
+                <X size={14} />
+              </button>
+            </div>
+          ))}
+          <Button size="sm" variant="ghost" onClick={addEntry}>
+            <Plus size={12} /> 添加环境变量
+          </Button>
+        </div>
+      )}
     </div>
   );
 }

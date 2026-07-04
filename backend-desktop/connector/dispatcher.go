@@ -3,6 +3,7 @@ package connector
 import (
 	"context"
 	"encoding/base64"
+	"encoding/json"
 	"fmt"
 	"log/slog"
 	"os"
@@ -11,6 +12,9 @@ import (
 	"sync"
 	"time"
 
+	lark "github.com/larksuite/oapi-sdk-go/v3"
+	larkcore "github.com/larksuite/oapi-sdk-go/v3/core"
+	larkim "github.com/larksuite/oapi-sdk-go/v3/service/im/v1"
 	"lingxi-agent/db"
 )
 
@@ -37,6 +41,12 @@ var runClaudeStream ClaudeStreamRunner
 var runClaudeCtx ClaudeRunnerCtx
 var runClaudeStreamCtx ClaudeStreamRunnerCtx
 var runClaudeStreamCtxExt ClaudeStreamRunnerCtxExt
+var broadcastWSEvent func(event, data string)
+
+// SetBroadcastFunc 注入 WS 广播函数（用于 desktop_notify 等）
+func SetBroadcastFunc(fn func(event, data string)) {
+	broadcastWSEvent = fn
+}
 
 // SetClaudeRunner 由 main 包在启动时注入 handler.RunClaudeSync
 func SetClaudeRunner(fn ClaudeRunner) {
@@ -158,11 +168,13 @@ func Dispatch(msg IMMessage) {
 	// 提前计算 scopeKey，用于打断检测
 	scopeKey := computeScopeKey(msg, cfg.SessionMode)
 
-	// 打断已有任务
+	// 打断已有任务（P2P watcher 自行串行化，跳过打断）
 	activeMu.Lock()
-	cancelActiveTask(scopeKey)
+	if !msg.SkipCancel {
+		cancelActiveTask(scopeKey)
+	}
 	ctx, cancel := context.WithCancel(context.Background())
-	if scopeKey != "" {
+	if scopeKey != "" && !msg.SkipCancel {
 		activeTasks[scopeKey] = cancel
 	}
 	activeMu.Unlock()
@@ -184,7 +196,13 @@ func Dispatch(msg IMMessage) {
 		slog.Info("[dispatch] before saveIMImagesToTmp", "images_count", len(msg.Images))
 		imagePaths := saveIMImagesToTmp(msg.Images)
 		slog.Info("[dispatch] after saveIMImagesToTmp", "image_paths", imagePaths)
+		postDoneCalled := false
 		defer func() {
+			// 保证 PostDoneFunc 在任何情况下都被调用（错误/取消/超时），
+			// 避免 P2P watcher 的 processing 锁死
+			if !postDoneCalled && msg.PostDoneFunc != nil {
+				msg.PostDoneFunc(0, "")
+			}
 			cleanupIMImageFiles(imagePaths)
 			cancel()
 			activeMu.Lock()
@@ -202,7 +220,10 @@ func Dispatch(msg IMMessage) {
 		slog.Info("dispatch platform= mode= scope images=", "platform", msg.Platform, "session_mode", cfg.SessionMode, "value", scopeKey, "images", len(imagePaths))
 
 		var sessionID int64
-		if cfg.SessionMode != SessionModeStateless {
+		if msg.ResumeSessionID > 0 {
+			sessionID = msg.ResumeSessionID
+			slog.Info("[dispatch] resuming session from reply chain", "session_id", sessionID)
+		} else if cfg.SessionMode != SessionModeStateless {
 			title := buildSessionTitle(msg)
 			sid, err := db.GetOrCreateIMSession(msg.Platform, scopeKey, title, cfg.SessionTTLHours, msg.AgentID)
 			if err != nil {
@@ -260,8 +281,9 @@ func Dispatch(msg IMMessage) {
 				}
 			}
 			// 流式完成后触发交互卡片（反馈/选择/输入）
-			if streamErr == nil && msg.PostDoneFunc != nil {
+			if msg.PostDoneFunc != nil {
 				msg.PostDoneFunc(sessionID, "")
+				postDoneCalled = true
 			}
 			if cfg.SessionMode != SessionModeStateless && scopeKey != "" {
 				db.TouchIMSession(msg.Platform, scopeKey)
@@ -320,8 +342,9 @@ func Dispatch(msg IMMessage) {
 		}
 
 		// 非流式完成后触发交互卡片
-		if msg.PostDoneFunc != nil && finalReply != "" {
+		if msg.PostDoneFunc != nil {
 			msg.PostDoneFunc(sessionID, finalReply)
+			postDoneCalled = true
 		}
 
 		if cfg.SessionMode != SessionModeStateless && scopeKey != "" {
@@ -409,6 +432,60 @@ func buildIMContextPrefix(msg IMMessage) string {
 	}
 
 	return prefix
+}
+
+// SendViaFeishu 通过指定 connectorID 的飞书连接器发送消息。
+// targetType: "chat" → sendToChat, "user" → sendToUser
+func SendViaFeishu(connectorID int64, targetType, targetID, text string) error {
+	c, err := db.GetIMConnectorByID(connectorID)
+	if err != nil {
+		return fmt.Errorf("get connector %d: %w", connectorID, err)
+	}
+	if c == nil {
+		return fmt.Errorf("connector %d not found", connectorID)
+	}
+	var cfg FeishuConfig
+	if err := json.Unmarshal([]byte(c.Config), &cfg); err != nil {
+		return fmt.Errorf("parse feishu config: %w", err)
+	}
+	if cfg.AppID == "" || cfg.AppSecret == "" {
+		return fmt.Errorf("feishu connector %d missing app_id/app_secret", connectorID)
+	}
+	client := lark.NewClient(cfg.AppID, cfg.AppSecret, lark.WithLogLevel(larkcore.LogLevelWarn))
+
+	escapedText := strings.ReplaceAll(text, `\`, `\\`)
+	escapedText = strings.ReplaceAll(escapedText, `"`, `\"`)
+	escapedText = strings.ReplaceAll(escapedText, "\n", `\n`)
+	escapedText = strings.ReplaceAll(escapedText, "\r", `\r`)
+	escapedText = strings.ReplaceAll(escapedText, "\t", `\t`)
+
+	var recvIDType string
+	switch targetType {
+	case "chat":
+		recvIDType = "chat_id"
+	case "user":
+		recvIDType = "open_id"
+	default:
+		return fmt.Errorf("unsupported targetType: %s", targetType)
+	}
+
+	body := larkim.NewCreateMessageReqBodyBuilder().
+		ReceiveId(targetID).
+		MsgType("text").
+		Content(`{"text":"` + escapedText + `"}`).
+		Build()
+	req := larkim.NewCreateMessageReqBuilder().
+		ReceiveIdType(recvIDType).
+		Body(body).
+		Build()
+	resp, err := client.Im.Message.Create(context.Background(), req)
+	if err != nil {
+		return fmt.Errorf("feishu send error: %w", err)
+	}
+	if !resp.Success() {
+		return fmt.Errorf("feishu send failed: code=%d msg=%s", resp.Code, resp.Msg)
+	}
+	return nil
 }
 
 // filterStateMarkers 移除 AI 输出中的内部状态标记 JSON 片段

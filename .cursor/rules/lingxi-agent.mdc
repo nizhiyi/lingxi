@@ -942,3 +942,25 @@ PORT=3099 DB_PATH=/tmp/lingxi-instance2/smart-agent.db FRONTEND_DIST=../frontend
 - [x] **前端 UI**：IMConnectorPage 飞书连接器卡片新增「监听模式配置」折叠面板——规则管理 tab（列表 + 新建/编辑规则弹窗，含群选择器/发送者/消息类型/关键词/动作配置）+ 监听日志 tab（最近 50 条日志，含命中规则/动作结果/错误信息）
 - [x] **飞书消息发送**：`FeishuConnector` 新增 `sendToChat` / `sendToUser` 方法（`client.Im.Message.Create` API，receive_id_type 区分 chat_id/open_id）
 - [x] **connectorID 传播**：`connector.Manager.StartWithAgentAndID` 新方法，启动时将 `im_connectors.id` 注入 connector 实例，用于监听规则查询
+
+### 飞书监听消息串行化 + 流式卡片美化（v2026-07 Phase 34）
+- [x] **监听消息按 chatID 串行化**：`FeishuConnector.monitorQueues` 按群 ID 串行化队列 + `monitorProcessLoop` 消费协程，同一群的监听消息排队处理，解决并发打断
+- [x] **executeAction 阻塞等待**：`doneCh` channel 阻塞直到 Agent 处理完毕（5min 超时），`SkipCancel: true` 避免 Dispatch 层打断
+- [x] **流式工具摘要覆盖式更新**：单行聚合摘要实时覆盖（`> 🔧 执行中：Bash ×3 · Read`），不再逐行追加
+- [x] **心跳覆盖式更新**：更新工具摘要行末尾 ⏳ 后缀，不再追加新行
+- [x] **最终卡片工具折叠面板**：`replaceCardFinal` 新增 `collapsible_panel`（🔧 执行了 N 次工具调用），默认折叠
+- [x] **最终卡片纯净正文**：`removeToolMarkerLines` 移除所有流式标记行（🔧/💭/⏳/---）
+- [x] **Agent 环境变量 system prompt 注入**：`buildAgentEnvVarsHint` 将已配环境变量名称（不含值）追加到 system prompt，AI 可直接使用 `$VAR_NAME`
+- [x] **回复链续接上下文**：`im_reply_sessions` 表持久化映射（bot 消息 ID → session ID），用户飞书引用回复 bot 消息时 `IMMessage.ResumeSessionID` 自动复用原 session，支持无限嵌套回复链；群聊中回复 bot 且未 @bot 也视为续接（`isReplyToBot` 检测绕过监听路径）
+
+### 飞书 Agent Teams 多 Agent 任务协调（v2026-07 Phase 35）
+- [x] **feishu_task_instances 表**：任务协调实例持久化（状态机：CREATED→ACCEPTED→DISPATCHED→MONITORING→DONE + dispatch_history/accumulated_context/current_round/max_rounds/reply_timeout_minutes/reply_debounce_seconds）
+- [x] **FeishuMonitorRule 扩展**：新增 target_chat_id/dispatch_targets/completion_strategy/max_rounds/reply_timeout_minutes/reply_debounce_seconds 字段，支持 Agent Teams 模式配置
+- [x] **飞书卡片构建器**：`feishu_task_cards.go` 提供主任务卡片（橙→蓝→绿状态色）、流式思考卡片、进度卡片、分发 @mention 文本 + 详情卡片
+- [x] **TaskCoordinator 核心引擎**：`feishu_task_coordinator.go` goroutine 管理任务全生命周期——初始分析（流式思考卡片）→ 并行分发（@mention 文本 + 详情卡片）→ 防抖回复等待（configurable debounce_seconds）→ LLM 完成判断 → 主卡片状态 PATCH → 多轮迭代（max_rounds）
+- [x] **话题路由**：`feishu.go` onMessage() 新增 RootId 路由，话题回复自动分发到活跃 TaskCoordinator
+- [x] **监听规则挂钩**：`feishu_monitor.go` executeAction 新增 agent_teams 分支，匹配规则时启动 TaskCoordinator goroutine
+- [x] **LLM 注入**：`RunClaudeForTaskFunc` 由 main.go 注入 `handler.RunClaudeSync`，协调器用于初始分析和完成判断
+- [x] **崩溃恢复**：`recoverActiveTasks()` 启动时查询 DB 活跃任务实例，重建 coordinator 并注册到全局路由表
+- [x] **HTTP API**：`handler/feishu_task.go` 提供 GET /api/feishu-tasks（列表+状态筛选）、GET /:id（详情）、POST /:id/close（手动关闭）、GET /chat-members（群成员列表）
+- [x] **前端 UI**：IMConnectorPage 新增 agent_teams 动作类型 + 目标群选择器 + 群成员角色配置（点击选中/取消 + 自定义角色名）+ 防抖/超时/轮次参数配置面板

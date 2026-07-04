@@ -8,22 +8,29 @@ import (
 
 // FeishuMonitorRule 飞书监听规则
 type FeishuMonitorRule struct {
-	ID            int64  `json:"id"`
-	ConnectorID   int64  `json:"connector_id"`
-	Name          string `json:"name"`
-	Enabled       bool   `json:"enabled"`
-	ChatIDs       string `json:"chat_ids"`
-	SenderIDs     string `json:"sender_ids"`
-	ExcludeBotMsg bool   `json:"exclude_bot_msg"`
-	MsgTypes      string `json:"msg_types"`
-	Keywords      string `json:"keywords"`
-	KeywordMode   string `json:"keyword_mode"`
-	ActionType    string `json:"action_type"`
-	ActionTarget  string `json:"action_target"`
-	CustomPrompt  string `json:"custom_prompt"`
-	Priority      int    `json:"priority"`
-	CreatedAt     string `json:"created_at"`
-	UpdatedAt     string `json:"updated_at"`
+	ID                   int64  `json:"id"`
+	ConnectorID          int64  `json:"connector_id"`
+	Name                 string `json:"name"`
+	Enabled              bool   `json:"enabled"`
+	ChatIDs              string `json:"chat_ids"`
+	SenderIDs            string `json:"sender_ids"`
+	ExcludeBotMsg        bool   `json:"exclude_bot_msg"`
+	MsgTypes             string `json:"msg_types"`
+	Keywords             string `json:"keywords"`
+	KeywordMode          string `json:"keyword_mode"`
+	ActionType           string `json:"action_type"`
+	ActionTarget         string `json:"action_target"`
+	CustomPrompt         string `json:"custom_prompt"`
+	ReplyPrefix          string `json:"reply_prefix"`
+	Priority             int    `json:"priority"`
+	TargetChatID         string `json:"target_chat_id"`
+	DispatchTargets      string `json:"dispatch_targets"`
+	CompletionStrategy   string `json:"completion_strategy"`
+	MaxRounds            int    `json:"max_rounds"`
+	ReplyTimeoutMinutes  int    `json:"reply_timeout_minutes"`
+	ReplyDebounceSeconds int    `json:"reply_debounce_seconds"`
+	CreatedAt            string `json:"created_at"`
+	UpdatedAt            string `json:"updated_at"`
 }
 
 // FeishuMonitorLog 飞书监听日志
@@ -51,15 +58,32 @@ func CreateMonitorRule(r *FeishuMonitorRule) (int64, error) {
 	if r.ActionType == "" {
 		r.ActionType = "reply_original"
 	}
+	if r.DispatchTargets == "" {
+		r.DispatchTargets = "[]"
+	}
+	if r.CompletionStrategy == "" {
+		r.CompletionStrategy = "debounce"
+	}
+	if r.MaxRounds <= 0 {
+		r.MaxRounds = 10
+	}
+	if r.ReplyTimeoutMinutes <= 0 {
+		r.ReplyTimeoutMinutes = 10
+	}
+	if r.ReplyDebounceSeconds <= 0 {
+		r.ReplyDebounceSeconds = 30
+	}
 	res, err := DB.Exec(`
 		INSERT INTO feishu_monitor_rules
 		(connector_id, name, enabled, chat_ids, sender_ids, exclude_bot_msg,
-		 msg_types, keywords, keyword_mode, action_type, action_target, custom_prompt, priority)
-		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+		 msg_types, keywords, keyword_mode, action_type, action_target, custom_prompt, reply_prefix, priority,
+		 target_chat_id, dispatch_targets, completion_strategy, max_rounds, reply_timeout_minutes, reply_debounce_seconds)
+		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
 		r.ConnectorID, r.Name, boolToInt(r.Enabled),
 		r.ChatIDs, r.SenderIDs, boolToInt(r.ExcludeBotMsg),
 		r.MsgTypes, r.Keywords, r.KeywordMode,
-		r.ActionType, r.ActionTarget, r.CustomPrompt, r.Priority,
+		r.ActionType, r.ActionTarget, r.CustomPrompt, r.ReplyPrefix, r.Priority,
+		r.TargetChatID, r.DispatchTargets, r.CompletionStrategy, r.MaxRounds, r.ReplyTimeoutMinutes, r.ReplyDebounceSeconds,
 	)
 	if err != nil {
 		return 0, err
@@ -73,12 +97,17 @@ func UpdateMonitorRule(r *FeishuMonitorRule) error {
 		UPDATE feishu_monitor_rules SET
 			name=?, enabled=?, chat_ids=?, sender_ids=?, exclude_bot_msg=?,
 			msg_types=?, keywords=?, keyword_mode=?, action_type=?, action_target=?,
-			custom_prompt=?, priority=?, updated_at=CURRENT_TIMESTAMP
+			custom_prompt=?, reply_prefix=?, priority=?,
+			target_chat_id=?, dispatch_targets=?, completion_strategy=?, max_rounds=?,
+			reply_timeout_minutes=?, reply_debounce_seconds=?,
+			updated_at=CURRENT_TIMESTAMP
 		WHERE id=?`,
 		r.Name, boolToInt(r.Enabled),
 		r.ChatIDs, r.SenderIDs, boolToInt(r.ExcludeBotMsg),
 		r.MsgTypes, r.Keywords, r.KeywordMode,
-		r.ActionType, r.ActionTarget, r.CustomPrompt, r.Priority,
+		r.ActionType, r.ActionTarget, r.CustomPrompt, r.ReplyPrefix, r.Priority,
+		r.TargetChatID, r.DispatchTargets, r.CompletionStrategy, r.MaxRounds,
+		r.ReplyTimeoutMinutes, r.ReplyDebounceSeconds,
 		r.ID,
 	)
 	return err
@@ -96,20 +125,28 @@ func ToggleMonitorRule(id int64) error {
 	return err
 }
 
-// GetMonitorRule 获取单条规则
-func GetMonitorRule(id int64) (*FeishuMonitorRule, error) {
+// monitorRuleCols 所有规则列
+const monitorRuleCols = `id, connector_id, name, enabled, chat_ids, sender_ids, exclude_bot_msg,
+	msg_types, keywords, keyword_mode, action_type, action_target,
+	custom_prompt, reply_prefix, priority,
+	target_chat_id, dispatch_targets, completion_strategy, max_rounds,
+	reply_timeout_minutes, reply_debounce_seconds,
+	created_at, updated_at`
+
+func scanMonitorRule(scanner interface {
+	Scan(dest ...interface{}) error
+}) (*FeishuMonitorRule, error) {
 	r := &FeishuMonitorRule{}
 	var enabled, excludeBot int
-	err := DB.QueryRow(`
-		SELECT id, connector_id, name, enabled, chat_ids, sender_ids, exclude_bot_msg,
-		       msg_types, keywords, keyword_mode, action_type, action_target,
-		       custom_prompt, priority, created_at, updated_at
-		FROM feishu_monitor_rules WHERE id=?`, id).Scan(
+	err := scanner.Scan(
 		&r.ID, &r.ConnectorID, &r.Name, &enabled,
 		&r.ChatIDs, &r.SenderIDs, &excludeBot,
 		&r.MsgTypes, &r.Keywords, &r.KeywordMode,
 		&r.ActionType, &r.ActionTarget,
-		&r.CustomPrompt, &r.Priority, &r.CreatedAt, &r.UpdatedAt,
+		&r.CustomPrompt, &r.ReplyPrefix, &r.Priority,
+		&r.TargetChatID, &r.DispatchTargets, &r.CompletionStrategy, &r.MaxRounds,
+		&r.ReplyTimeoutMinutes, &r.ReplyDebounceSeconds,
+		&r.CreatedAt, &r.UpdatedAt,
 	)
 	if err != nil {
 		return nil, err
@@ -119,15 +156,14 @@ func GetMonitorRule(id int64) (*FeishuMonitorRule, error) {
 	return r, nil
 }
 
+// GetMonitorRule 获取单条规则
+func GetMonitorRule(id int64) (*FeishuMonitorRule, error) {
+	return scanMonitorRule(DB.QueryRow(`SELECT `+monitorRuleCols+` FROM feishu_monitor_rules WHERE id=?`, id))
+}
+
 // ListMonitorRules 列出某个连接器的所有监听规则（按 priority DESC）
 func ListMonitorRules(connectorID int64) ([]FeishuMonitorRule, error) {
-	rows, err := DB.Query(`
-		SELECT id, connector_id, name, enabled, chat_ids, sender_ids, exclude_bot_msg,
-		       msg_types, keywords, keyword_mode, action_type, action_target,
-		       custom_prompt, priority, created_at, updated_at
-		FROM feishu_monitor_rules
-		WHERE connector_id=?
-		ORDER BY priority DESC, id ASC`, connectorID)
+	rows, err := DB.Query(`SELECT `+monitorRuleCols+` FROM feishu_monitor_rules WHERE connector_id=? ORDER BY priority DESC, id ASC`, connectorID)
 	if err != nil {
 		return nil, err
 	}
@@ -135,33 +171,18 @@ func ListMonitorRules(connectorID int64) ([]FeishuMonitorRule, error) {
 
 	var result []FeishuMonitorRule
 	for rows.Next() {
-		var r FeishuMonitorRule
-		var enabled, excludeBot int
-		if err := rows.Scan(
-			&r.ID, &r.ConnectorID, &r.Name, &enabled,
-			&r.ChatIDs, &r.SenderIDs, &excludeBot,
-			&r.MsgTypes, &r.Keywords, &r.KeywordMode,
-			&r.ActionType, &r.ActionTarget,
-			&r.CustomPrompt, &r.Priority, &r.CreatedAt, &r.UpdatedAt,
-		); err != nil {
+		r, err := scanMonitorRule(rows)
+		if err != nil {
 			continue
 		}
-		r.Enabled = enabled == 1
-		r.ExcludeBotMsg = excludeBot == 1
-		result = append(result, r)
+		result = append(result, *r)
 	}
 	return result, nil
 }
 
 // ListEnabledMonitorRules 列出某个连接器的所有启用的监听规则（按 priority DESC）
 func ListEnabledMonitorRules(connectorID int64) ([]FeishuMonitorRule, error) {
-	rows, err := DB.Query(`
-		SELECT id, connector_id, name, enabled, chat_ids, sender_ids, exclude_bot_msg,
-		       msg_types, keywords, keyword_mode, action_type, action_target,
-		       custom_prompt, priority, created_at, updated_at
-		FROM feishu_monitor_rules
-		WHERE connector_id=? AND enabled=1
-		ORDER BY priority DESC, id ASC`, connectorID)
+	rows, err := DB.Query(`SELECT `+monitorRuleCols+` FROM feishu_monitor_rules WHERE connector_id=? AND enabled=1 ORDER BY priority DESC, id ASC`, connectorID)
 	if err != nil {
 		return nil, err
 	}
@@ -169,20 +190,11 @@ func ListEnabledMonitorRules(connectorID int64) ([]FeishuMonitorRule, error) {
 
 	var result []FeishuMonitorRule
 	for rows.Next() {
-		var r FeishuMonitorRule
-		var enabled, excludeBot int
-		if err := rows.Scan(
-			&r.ID, &r.ConnectorID, &r.Name, &enabled,
-			&r.ChatIDs, &r.SenderIDs, &excludeBot,
-			&r.MsgTypes, &r.Keywords, &r.KeywordMode,
-			&r.ActionType, &r.ActionTarget,
-			&r.CustomPrompt, &r.Priority, &r.CreatedAt, &r.UpdatedAt,
-		); err != nil {
+		r, err := scanMonitorRule(rows)
+		if err != nil {
 			continue
 		}
-		r.Enabled = enabled == 1
-		r.ExcludeBotMsg = excludeBot == 1
-		result = append(result, r)
+		result = append(result, *r)
 	}
 	return result, nil
 }
