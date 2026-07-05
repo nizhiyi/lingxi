@@ -53,6 +53,7 @@ func main() {
 	r.StaticFile("/favicon.ico", dist+"/favicon.ico")
 
 	api := r.Group("/api")
+	api.Use(handler.PairTokenAuthMiddleware())
 
 	// 用户上传图片静态目录
 	uploadsDir := os.Getenv("UPLOADS_PATH")
@@ -65,11 +66,30 @@ func main() {
 	// 初始化 IM 连接器管理器（在路由组创建后立即初始化，wecom 会注册子路由）
 	connector.InitManager(api)
 	connector.SetClaudeRunner(handler.RunClaudeSync)
+	connector.SetClaudeStreamRunner(handler.RunClaudeStreaming)
+	connector.SetClaudeRunnerCtx(handler.RunClaudeSyncCtx)
+	connector.SetClaudeStreamRunnerCtx(handler.RunClaudeStreamingCtx)
+	connector.SetClaudeStreamRunnerCtxExt(handler.RunClaudeStreamingCtxExt)
+	connector.SetBroadcastFunc(handler.BroadcastWSEvent)
+	connector.RunClaudeForTaskFunc = func(message string, sessionID int64) (string, int64, error) {
+		return handler.RunClaudeSync(message, sessionID, nil)
+	}
+	handler.SetCoordinatorLookup(func(rootMsgID string) interface{ CloseByAPI(reason string) } {
+		if tc := connector.LookupCoordinator(rootMsgID); tc != nil {
+			return tc
+		}
+		return nil
+	})
 	go connector.GlobalManager.LoadFromDB()
 
 	// 健康检查
 	api.GET("/ping", func(c *gin.Context) { c.JSON(http.StatusOK, gin.H{"ok": true}) })
 	api.GET("/health", handler.HealthCheck)
+
+	// 主动式 Agent（日报 + 任务追踪）
+	api.GET("/proactive/config", handler.GetProactiveConfig)
+	api.PUT("/proactive/config", handler.UpdateProactiveConfig)
+	api.POST("/proactive/trigger-digest", handler.TriggerDigest)
 
 	// 数据库备份
 	api.GET("/backup/export", handler.ExportBackup)
@@ -83,12 +103,29 @@ func main() {
 	api.GET("/auth/oauth-configs", handler.ListOAuthConfigs)
 	api.POST("/auth/oauth-configs", handler.SaveOAuthConfig)
 
+	// ── 手机配对 ──────────────────────────────────────────────────
+	api.POST("/pair/initiate", handler.PairInitiateHandler)
+	api.POST("/pair/complete", handler.PairCompleteHandler)
+	api.POST("/pair/verify", handler.PairVerifyHandler)
+	api.GET("/pair/devices", handler.PairListDevicesHandler)
+	api.DELETE("/pair/devices/:id", handler.PairUnpairHandler)
+	api.POST("/pair/devices/:id/rotate", handler.PairRotateHandler)
+	api.POST("/pair/devices/:id/push-token", handler.PairRegisterPushTokenHandler)
+	api.POST("/pair/revoke-all", handler.PairRevokeAllHandler)
+	api.POST("/auth/ws-ticket", handler.IssueWsTicketHandler)
+
+	// 推送通知配置
+	api.GET("/push/config", handler.GetPushConfigHandler)
+	api.PUT("/push/config", handler.SetPushConfigHandler)
+	api.POST("/push/test", handler.TestPushHandler)
+
 	// 单机模式：无认证，所有接口直接可用
 	api.GET("/sessions", handler.ListSessions)
 	api.POST("/sessions", handler.CreateSession)
 	api.PATCH("/sessions/:id", handler.UpdateSession)
 	api.DELETE("/sessions/:id", handler.DeleteSession)
 	api.POST("/sessions/batch-delete", handler.BatchDeleteSessions)
+	api.POST("/sessions/batch-export", handler.BatchExportSessions)
 	api.POST("/sessions/:id/fork", handler.ForkSession)
 	api.POST("/sessions/:id/extract-knowledge", handler.ExtractSessionKnowledge)
 	api.GET("/sessions/:id/messages", handler.ListMessages)
@@ -116,6 +153,8 @@ func main() {
 	api.POST("/skills/install-github", handler.InstallDotSkillHandler)
 	api.POST("/skills/upload", handler.UploadSkill)
 	api.POST("/skills/batch-upload", handler.BatchUploadSkill)
+	api.POST("/skills/from-git", handler.SkillFromGitScan)
+	api.POST("/skills/from-git/install", handler.SkillFromGitInstall)
 	api.POST("/skills/generate/stream", handler.GenerateSkillStream)
 	api.POST("/skills/generate/confirm", handler.ConfirmGeneratedSkill)
 	api.GET("/skills/marketplace", handler.MarketplaceSearch)
@@ -143,6 +182,13 @@ func main() {
 	api.POST("/knowledge/categories", handler.CreateKnowledgeCategory)
 	api.DELETE("/knowledge/categories/:id", handler.DeleteKnowledgeCategory)
 
+	// Web 知识采集
+	api.POST("/knowledge/from-url", handler.ImportKnowledgeFromURL)
+	api.POST("/knowledge/from-urls", handler.BatchImportKnowledgeFromURLs)
+
+	// 深度联网搜索（多源 + 交叉验证 + 引用追踪）
+	api.POST("/search/deep", handler.DeepSearch)
+
 	// 向量知识库（深度 RAG）
 	api.POST("/knowledge/reindex", handler.ReindexKnowledge)
 	api.GET("/knowledge/index-status", handler.GetIndexStatus)
@@ -161,14 +207,37 @@ func main() {
 	api.DELETE("/im-connectors/:id", handler.DeleteIMConnector)
 	api.POST("/im-connectors/:id/send", handler.SendWebhookMessage)
 	api.POST("/im-connectors/:id/test", handler.TestWebhook)
+	api.POST("/feishu/test-card", handler.TestFeishuCard)
 
-	// 权限审批
-	api.GET("/permission-rules", handler.ListPermissionRulesHandler)
-	api.POST("/permission-rules", handler.CreatePermissionRuleHandler)
-	api.DELETE("/permission-rules/:id", handler.DeletePermissionRuleHandler)
-	api.GET("/approvals/pending", handler.ListPendingApprovalsHandler)
-	api.GET("/approvals", handler.ListRecentApprovalsHandler)
-	api.POST("/approvals/:id/review", handler.ReviewApprovalHandler)
+	// IM 看板
+	api.GET("/im-dashboard/sessions", handler.ListIMSessionsHandler)
+	api.GET("/im-dashboard/stats", handler.GetIMDashboardStatsHandler)
+	api.GET("/im-dashboard/sessions/:id/messages", handler.GetIMSessionMessagesHandler)
+	api.DELETE("/im-dashboard/sessions/:id", handler.DeleteIMSessionHandler)
+
+	// 飞书监听模式
+	api.GET("/feishu-monitor/rules", handler.ListMonitorRules)
+	api.POST("/feishu-monitor/rules", handler.CreateMonitorRule)
+	api.PUT("/feishu-monitor/rules/:id", handler.UpdateMonitorRule)
+	api.DELETE("/feishu-monitor/rules/:id", handler.DeleteMonitorRule)
+	api.PUT("/feishu-monitor/rules/:id/toggle", handler.ToggleMonitorRule)
+	api.GET("/feishu-monitor/logs", handler.ListMonitorLogs)
+	api.GET("/feishu-monitor/chats", handler.ListFeishuChats)
+
+	// 飞书 Agent Teams 任务
+	api.GET("/feishu-tasks", handler.ListFeishuTasks)
+	api.GET("/feishu-tasks/:id", handler.GetFeishuTask)
+	api.POST("/feishu-tasks/:id/close", handler.CloseFeishuTask)
+	api.GET("/feishu-tasks/chat-members", handler.ListChatMembers)
+
+	// P2P 机器人消息监听
+	api.GET("/p2p-watch/targets", handler.ListP2PWatchTargetsHandler)
+	api.POST("/p2p-watch/targets", handler.CreateP2PWatchTargetHandler)
+	api.PUT("/p2p-watch/targets/:id", handler.UpdateP2PWatchTargetHandler)
+	api.DELETE("/p2p-watch/targets/:id", handler.DeleteP2PWatchTargetHandler)
+	api.PUT("/p2p-watch/targets/:id/toggle", handler.ToggleP2PWatchTargetHandler)
+	api.GET("/p2p-watch/status", handler.GetP2PWatchStatusHandler)
+	api.POST("/p2p-watch/test", handler.TestP2PWatchHandler)
 
 	// H5 远程访问
 	api.GET("/h5-access/settings", handler.GetH5AccessSettingsHandler)
@@ -181,6 +250,13 @@ func main() {
 	api.GET("/h5-access/sessions", handler.H5SessionListHandler)
 	api.GET("/h5-access/session/:sessionId/messages", handler.H5SessionMessagesHandler)
 	api.GET("/h5-access/agents", handler.H5AgentsListHandler)
+
+	// H5 云端隧道
+	api.POST("/h5-tunnel/enable", func(c *gin.Context) {
+		c.Set("server_port", cfg.Server.Port)
+		handler.EnableH5TunnelHandler(c)
+	})
+	api.GET("/h5-tunnel/status", handler.GetH5TunnelStatusHandler)
 
 	// 模型 / 接入点 / AKSK 档案
 	api.GET("/providers", handler.ListProviders)
@@ -216,7 +292,11 @@ func main() {
 	api.GET("/agents/distill/records/:id/files/*filepath", handler.DownloadDistillRecordFile)
 	api.GET("/agents/:id", handler.GetAgent)
 	api.DELETE("/agents/:id", handler.DeleteAgent)
+	api.GET("/agents/:id/export-bundle", handler.ExportAgentBundleHandler)
+	api.POST("/agents/import-bundle", handler.ImportAgentBundleHandler)
 	api.POST("/sessions/:id/agent", handler.SetSessionAgent)
+	api.GET("/sessions/:id/token-stats", handler.GetSessionTokenStats)
+	api.POST("/sessions/:id/summarize", handler.SummarizeSession)
 
 	// 定时任务
 	api.GET("/scheduled-tasks", handler.ListScheduledTasks)
@@ -254,13 +334,6 @@ func main() {
 	nexusLimiter := handler.NewRateLimiter(60, 20) // 60 req/min, burst 20
 	nexusAPI := api.Group("/nexus", handler.NexusRateLimit(nexusLimiter))
 	nexusAPI.GET("/info", handler.NexusInfo)
-	nexusAPI.POST("/conversation/invite", handler.NexusReceiveConvInvite)
-	nexusAPI.POST("/conversation/accept", handler.NexusReceiveConvAccept)
-	nexusAPI.POST("/conversation/reject", handler.NexusReceiveConvReject)
-	nexusAPI.POST("/conversation/message", handler.NexusReceiveMessage)
-	nexusAPI.POST("/conversation/pause", handler.NexusReceivePause)
-	nexusAPI.POST("/conversation/terminate", handler.NexusReceiveTerminate)
-	nexusAPI.POST("/conversation/stream-token", handler.NexusReceiveStreamToken)
 	nexusAPI.GET("/settings", handler.GetNexusSettings)
 	nexusAPI.PUT("/settings", handler.UpdateNexusSettings)
 
@@ -300,16 +373,6 @@ func main() {
 	api.GET("/wan/peers", handler.ListWANPeers)
 	api.GET("/wan/status", handler.WANStatus)
 
-	api.POST("/a2a-conversations", handler.CreateA2AConversation)
-	api.GET("/a2a-conversations", handler.ListA2AConversations)
-	api.GET("/a2a-conversations/:id", handler.GetA2AConversation)
-	api.POST("/a2a-conversations/:id/pause", handler.PauseA2AConversation)
-	api.POST("/a2a-conversations/:id/takeover", handler.TakeoverA2AConversation)
-	api.POST("/a2a-conversations/:id/terminate", handler.TerminateA2AConversation)
-	api.POST("/a2a-conversations/:id/approve", handler.ApproveA2AConversation)
-	api.POST("/a2a-conversations/:id/accept-remote", handler.AcceptRemoteConversation)
-	api.POST("/a2a-conversations/:id/reject-remote", handler.RejectRemoteConversation)
-	api.DELETE("/a2a-conversations/:id", handler.DeleteA2AConversation)
 	api.GET("/agents/:id/nexus-config", handler.GetAgentNexusConfig)
 	api.PUT("/agents/:id/nexus-config", handler.UpsertAgentNexusConfig)
 
@@ -341,30 +404,6 @@ func main() {
 	api.GET("/files/search", handler.SearchFiles)
 	api.GET("/files/search-names", handler.SearchFileNames)
 
-	// Coding 模式专用 API
-	api.GET("/coding/changes", handler.GetWorkspaceChanges)
-	api.GET("/coding/diff", handler.GetFileDiff)
-	api.GET("/coding/branch", handler.GetGitBranch)
-	api.POST("/coding/chat", handler.CodingChat)
-	api.POST("/coding/chat/answer-batch", handler.CodingChatAnswerBatch)
-	api.POST("/coding/chat/permission-response", handler.CodingChatPermissionResponse)
-	api.POST("/coding/checkpoint", handler.CreateCheckpoint)
-	api.POST("/coding/rollback/:id", handler.RollbackCheckpoint)
-	api.GET("/coding/checkpoints/:sessionId", handler.ListCheckpoints)
-	api.GET("/coding/checkpoint-files/:id", handler.GetCheckpointFiles)
-	api.GET("/coding/agents", handler.ListCodingAgents)
-	api.POST("/coding/agents", handler.SaveCodingAgent)
-	api.DELETE("/coding/agents/:id", handler.DeleteCodingAgent)
-	api.PUT("/coding/agents/:id", handler.UpdateCodingAgent)
-	api.GET("/coding/plugins", handler.GetCodingPlugins)
-	api.PUT("/coding/plugins", handler.SaveCodingPlugins)
-	api.GET("/coding/hooks-config", handler.GetCodingHooksConfigHandler)
-	api.PUT("/coding/hooks-config", handler.UpdateCodingHooksConfigHandler)
-	api.GET("/coding/prompt-config", handler.GetCodingPromptConfigHandler)
-	api.PUT("/coding/prompt-config", handler.UpdateCodingPromptConfigHandler)
-	api.GET("/coding/perm-config", handler.GetCodingPermConfigHandler)
-	api.PUT("/coding/perm-config", handler.UpdateCodingPermConfigHandler)
-
 	// Electron 启动时下发激活档案明文 token
 	api.POST("/runtime/active-secret", handler.SetActiveSecret)
 
@@ -386,17 +425,22 @@ func main() {
 	// 注入向量索引广播函数
 	vectordb.BroadcastFn = handler.BroadcastWSEvent
 
-	// 启动 Nexus Agent-to-Agent 通信服务
-	nexus.Init(handler.RunA2AStreamingTurn, handler.CreateA2ASession, handler.BroadcastWSEvent)
+	// 启动 Nexus 通信服务（群聊跨实例通信）
+	nexus.Init(handler.BroadcastWSEvent)
 	nexus.SetRelayHandler(buildRelayHandler(r))
 	nexus.Global.Start()
 
 	// 群聊常驻 Agent 协程
 	grouploop.Init(handler.SpeakInGroup)
+	grouploop.SetMeetingDriver(handler.DriveMeeting)
 	grouploop.BootAll()
 
 	// 启动定时任务调度器
-	scheduler.Init(handler.RunClaudeSync, func(taskName, summary string) {
+	// scheduler.ChatRunner 是 2 参数签名（无图片），而 RunClaudeSync 现在是 3 参数（含 imagePaths）。
+	// 定时任务不会携带图片，这里包装成 2 参数版本。
+	scheduler.Init(func(message string, sessionID int64) (string, int64, error) {
+		return handler.RunClaudeSync(message, sessionID, nil)
+	}, func(taskName, summary string) {
 		body := summary
 		sessionID := ""
 		if idx := strings.LastIndex(summary, "|session_id:"); idx >= 0 {
@@ -426,6 +470,14 @@ func main() {
 	// 启动文件监控
 	watcher.Start()
 
+	// 启动 P2P 机器人消息监听
+	handler.SetFeishuSendFunc(connector.SendViaFeishu)
+	handler.InitP2PWatcher()
+	handler.StartP2PWatcher()
+
+	// 自动恢复 H5 云端隧道（如果之前已配置并启用）
+	handler.AutoStartH5Tunnel(cfg.Server.Port)
+
 	backupStop := make(chan struct{})
 	go handler.StartDailyBackup(backupStop)
 
@@ -452,6 +504,7 @@ func main() {
 
 	close(backupStop)
 	watcher.Stop()
+	handler.StopP2PWatcher()
 	scheduler.Stop()
 	dream.Stop()
 	nexus.Global.Stop()

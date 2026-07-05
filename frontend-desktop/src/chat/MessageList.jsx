@@ -1,9 +1,9 @@
-import { useEffect, useRef, useCallback, useMemo } from 'react';
+import { useEffect, useRef, useCallback, useMemo, useState } from 'react';
 import { useVirtualizer } from '@tanstack/react-virtual';
-import { motion } from 'framer-motion';
+import { motion, AnimatePresence } from 'framer-motion';
 import { useStore } from '../state/useStore';
 import { UserBubble, AssistantBubble } from './Bubble';
-import { Sparkles, ArrowRight } from 'lucide-react';
+import { Sparkles, ArrowRight, ArrowDown } from 'lucide-react';
 import { cn } from '../ui/cn';
 
 const VIRTUALIZE_THRESHOLD = 60;
@@ -13,9 +13,12 @@ export function MessageList() {
   const liveBlocks = useStore((s) => s.liveBlocks);
   const isStreaming = useStore((s) => s.isStreaming);
   const activeProfile = useStore((s) => s.activeProfile);
+  const activeSessionId = useStore((s) => s.activeSessionId);
   const scrollRef = useRef(null);
   const stickToBottomRef = useRef(true);
   const userScrolledRef = useRef(false);
+  const [showScrollBtn, setShowScrollBtn] = useState(false);
+  const prevSessionRef = useRef(activeSessionId);
 
   const items = useMemo(() => {
     const list = messages.map(m => ({ type: 'message', message: m }));
@@ -35,6 +38,7 @@ export function MessageList() {
     const atBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 80;
     stickToBottomRef.current = atBottom;
     userScrolledRef.current = !atBottom;
+    setShowScrollBtn(!atBottom && el.scrollHeight > el.clientHeight + 100);
   }, []);
 
   const scrollToBottom = useCallback(() => {
@@ -45,9 +49,41 @@ export function MessageList() {
     });
   }, []);
 
+  const forceScrollToBottom = useCallback(() => {
+    const el = scrollRef.current;
+    if (!el) return;
+    userScrolledRef.current = false;
+    stickToBottomRef.current = true;
+    setShowScrollBtn(false);
+    requestAnimationFrame(() => {
+      el.scrollTo({ top: el.scrollHeight, behavior: 'smooth' });
+    });
+  }, []);
+
+  // 切换会话时重置滚动状态
+  useEffect(() => {
+    if (activeSessionId !== prevSessionRef.current) {
+      prevSessionRef.current = activeSessionId;
+      userScrolledRef.current = false;
+      stickToBottomRef.current = true;
+      setShowScrollBtn(false);
+    }
+  }, [activeSessionId]);
+
+  // 消息变化时（含切换会话后加载完成），如果 stick 模式则滚到底部
+  useEffect(() => {
+    if (stickToBottomRef.current) {
+      const el = scrollRef.current;
+      if (!el) return;
+      requestAnimationFrame(() => {
+        el.scrollTo({ top: el.scrollHeight, behavior: 'instant' });
+      });
+    }
+  }, [messages]);
+
   useEffect(() => {
     if (stickToBottomRef.current) scrollToBottom();
-  }, [messages, liveBlocks, isStreaming, scrollToBottom]);
+  }, [liveBlocks, isStreaming, scrollToBottom]);
 
   if (items.length === 0) {
     return (
@@ -58,17 +94,53 @@ export function MessageList() {
   }
 
   if (shouldVirtualize) {
-    return <VirtualizedList items={items} scrollRef={scrollRef} onScroll={handleScroll} />;
+    return (
+      <div className="relative flex-1 min-h-0 overflow-hidden">
+        <VirtualizedList items={items} scrollRef={scrollRef} onScroll={handleScroll} />
+        <ScrollToBottomButton show={showScrollBtn} onClick={forceScrollToBottom} />
+      </div>
+    );
   }
 
   return (
-    <div ref={scrollRef} className="flex-1 overflow-y-auto scrollable px-4 pb-2" onScroll={handleScroll}>
-      <div className="max-w-4xl mx-auto py-6">
-        {items.map((item, i) => (
-          <MessageItem key={item.message?.id || `special-${i}`} item={item} />
-        ))}
+    <div className="relative flex-1 min-h-0 overflow-hidden">
+      <div ref={scrollRef} className="h-full overflow-y-auto scrollable px-4 pb-2" onScroll={handleScroll}>
+        <div className="max-w-4xl mx-auto py-6">
+          {items.map((item, i) => (
+            <MessageItem key={item.message?.id || `special-${i}`} item={item} />
+          ))}
+        </div>
       </div>
+      <ScrollToBottomButton show={showScrollBtn} onClick={forceScrollToBottom} />
     </div>
+  );
+}
+
+function ScrollToBottomButton({ show, onClick }) {
+  return (
+    <AnimatePresence>
+      {show && (
+        <motion.button
+          initial={{ opacity: 0, scale: 0.8, y: 10 }}
+          animate={{ opacity: 1, scale: 1, y: 0 }}
+          exit={{ opacity: 0, scale: 0.8, y: 10 }}
+          transition={{ duration: 0.2 }}
+          onClick={onClick}
+          className={cn(
+            'absolute bottom-3 left-1/2 -translate-x-1/2 z-20',
+            'flex items-center gap-1.5 px-3 py-1.5 rounded-full',
+            'bg-[color:var(--accent)] text-white shadow-lg shadow-[color:var(--accent)]/25',
+            'hover:shadow-xl hover:shadow-[color:var(--accent)]/30 hover:scale-105',
+            'active:scale-95 transition-all cursor-pointer',
+            'text-xs font-medium'
+          )}
+          title="滚动到底部"
+        >
+          <ArrowDown size={13} />
+          <span>回到底部</span>
+        </motion.button>
+      )}
+    </AnimatePresence>
   );
 }
 
@@ -81,7 +153,7 @@ function VirtualizedList({ items, scrollRef, onScroll }) {
   });
 
   return (
-    <div ref={scrollRef} className="flex-1 overflow-y-auto scrollable px-4 pb-2" onScroll={onScroll}>
+    <div ref={scrollRef} className="h-full overflow-y-auto scrollable px-4 pb-2" onScroll={onScroll}>
       <div className="max-w-4xl mx-auto py-6 relative" style={{ height: virtualizer.getTotalSize() }}>
         {virtualizer.getVirtualItems().map(row => (
           <div
@@ -144,6 +216,15 @@ const cardItem = {
 };
 
 function Empty({ profileName }) {
+  const SCENES = [
+    { title: '写作', prompt: '帮我润色这段文字，让它更生动', icon: '✍️', from: 'from-orange-400', to: 'to-amber-500' },
+    { title: '编程', prompt: '帮我写一段 Python 代码实现快速排序', icon: '💻', from: 'from-blue-400', to: 'to-cyan-500' },
+    { title: '翻译', prompt: '把下面这段话翻译成英文', icon: '🌐', from: 'from-purple-400', to: 'to-pink-500' },
+    { title: '总结', prompt: '帮我总结一下下面这段内容的要点', icon: '📋', from: 'from-emerald-400', to: 'to-teal-500' },
+    { title: '分析', prompt: '帮我分析这个问题的可行解决方案', icon: '🔍', from: 'from-rose-400', to: 'to-red-500' },
+    { title: '创意', prompt: '给我一些有趣的创意点子', icon: '💡', from: 'from-yellow-400', to: 'to-orange-500' },
+  ];
+
   const EXAMPLE_GROUPS = [
     { title: '创作写作', icon: Sparkles, color: 'from-violet-500 to-purple-600', items: [
       '帮我把这周的会议纪要整理成行动项',
@@ -169,13 +250,13 @@ function Empty({ profileName }) {
   return (
     <div className="h-full flex flex-col items-center justify-center px-6 py-10 text-center">
       <motion.div
-        className="relative mb-8"
+        className="relative mb-6 sm:mb-8"
         initial={{ opacity: 0, scale: 0.8 }}
         animate={{ opacity: 1, scale: 1 }}
         transition={{ duration: 0.6, ease: [.22,1,.36,1] }}
       >
-        <div className="ai-core-ring rounded-3xl bg-gradient-to-br from-[color:var(--accent)] to-[#5e8bff] text-white flex items-center justify-center shadow-glow" style={{ width: 80, height: 80 }}>
-          <Sparkles size={32} />
+        <div className="ai-core-ring rounded-3xl bg-gradient-to-br from-[color:var(--accent)] to-[#5e8bff] text-white flex items-center justify-center shadow-glow" style={{ width: 72, height: 72 }}>
+          <Sparkles size={28} />
         </div>
         <div className="absolute -bottom-1 -right-1 w-6 h-6 rounded-full bg-emerald-500 border-2 border-[color:var(--bg)] flex items-center justify-center">
           <div className="w-1.5 h-1.5 rounded-full bg-white" style={{ animation: 'breathe 1.6s ease-in-out infinite' }} />
@@ -183,7 +264,7 @@ function Empty({ profileName }) {
       </motion.div>
 
       <motion.h2
-        className="text-3xl font-bold tracking-tight"
+        className="text-2xl sm:text-3xl font-bold tracking-tight"
         variants={heroContainer}
         initial="initial"
         animate="animate"
@@ -198,7 +279,7 @@ function Empty({ profileName }) {
       </motion.h2>
 
       <motion.p
-        className="mt-3 text-[color:var(--text-soft)] text-base max-w-md"
+        className="mt-3 text-[color:var(--text-soft)] text-sm sm:text-base max-w-md"
         initial={{ opacity: 0, y: 8 }}
         animate={{ opacity: 1, y: 0 }}
         transition={{ delay: 0.6, duration: 0.4, ease: [.22,1,.36,1] }}
@@ -206,8 +287,32 @@ function Empty({ profileName }) {
         {profileName ? `当前接入：${profileName}` : '你的智能 AI 桌面助理，随时为你查信息、写内容、整理思路'}
       </motion.p>
 
+      {/* 移动端：场景入口网格（豆包风格） */}
       <motion.div
-        className="mt-8 grid grid-cols-1 sm:grid-cols-2 gap-3 w-full max-w-2xl"
+        className="mt-6 grid grid-cols-3 gap-2.5 w-full max-w-md sm:hidden"
+        variants={cardStagger}
+        initial="initial"
+        animate="animate"
+      >
+        {SCENES.map((s) => (
+          <motion.button
+            key={s.title}
+            variants={cardItem}
+            onClick={() => sendMessage({ message: s.prompt })}
+            className={cn(
+              'aspect-square rounded-2xl bg-gradient-to-br text-white p-3 flex flex-col items-start justify-between shadow-md active:scale-95 transition-transform',
+              s.from, s.to
+            )}
+          >
+            <span className="text-2xl">{s.icon}</span>
+            <span className="text-sm font-bold tracking-tight">{s.title}</span>
+          </motion.button>
+        ))}
+      </motion.div>
+
+      {/* 桌面端：分组示例卡片 */}
+      <motion.div
+        className="mt-8 hidden sm:grid sm:grid-cols-2 gap-3 w-full max-w-2xl"
         variants={cardStagger}
         initial="initial"
         animate="animate"
@@ -239,7 +344,7 @@ function Empty({ profileName }) {
       </motion.div>
 
       <motion.div
-        className="mt-6 flex items-center gap-4 text-[11px] text-[color:var(--text-faint)]"
+        className="mt-6 hidden sm:flex items-center gap-4 text-[11px] text-[color:var(--text-faint)]"
         initial={{ opacity: 0 }}
         animate={{ opacity: 1 }}
         transition={{ delay: 1.2, duration: 0.5 }}

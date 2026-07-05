@@ -1,10 +1,18 @@
 package main
 
 import (
+	"crypto"
+	"crypto/rsa"
+	"crypto/sha256"
+	"crypto/x509"
+	"encoding/base64"
 	"encoding/json"
+	"encoding/pem"
 	"fmt"
+	"io"
 	"log"
 	"net/http"
+	"net/url"
 	"os"
 	"strings"
 	"sync"
@@ -12,6 +20,8 @@ import (
 
 	"github.com/gorilla/websocket"
 )
+
+var base64Encoding = base64.StdEncoding
 
 // ─── 数据结构 ────────────────────────────────────────────────────
 
@@ -240,6 +250,7 @@ func handleWS(w http.ResponseWriter, r *http.Request) {
 			log.Printf("[ws] recovered panic in handleWS: %v", r)
 		}
 		if peer != nil {
+			tunnelHub.unregister(peer.InstanceID)
 			hub.unregister(peer.InstanceID)
 		}
 		conn.Close()
@@ -401,6 +412,80 @@ func handleWS(w http.ResponseWriter, r *http.Request) {
 				})
 			}
 
+		case "tunnel_register":
+			if peer == nil {
+				continue
+			}
+			var reg struct {
+				Token string `json:"token"`
+			}
+			json.Unmarshal(msg.Data, &reg)
+			if reg.Token == "" {
+				continue
+			}
+			tunnelHub.register(reg.Token, peer.InstanceID, peer)
+			safeWrite(SignalMessage{Type: "tunnel_registered", Data: jsonRaw(map[string]string{"status": "ok", "token": reg.Token})})
+
+		case "tunnel_response":
+			if peer == nil {
+				continue
+			}
+			var resp TunnelResponse
+			json.Unmarshal(msg.Data, &resp)
+			if resp.RequestID == "" {
+				continue
+			}
+			// 查找对应的隧道并投递响应
+			tunnelHub.mu.RLock()
+			for _, info := range tunnelHub.tunnels {
+				if info.InstanceID == peer.InstanceID {
+					if ch, ok := info.pending.Load(resp.RequestID); ok {
+						select {
+						case ch.(chan *TunnelResponse) <- &resp:
+						default:
+						}
+					}
+					break
+				}
+			}
+			tunnelHub.mu.RUnlock()
+
+		case "tunnel_ws_message":
+			// 桌面端转发本地 WS 消息给手机端
+			if peer == nil {
+				continue
+			}
+			var fwd struct {
+				WsID    string `json:"ws_id"`
+				Message string `json:"message"` // base64
+			}
+			json.Unmarshal(msg.Data, &fwd)
+			if fwd.WsID == "" {
+				continue
+			}
+			twsConn := tunnelWsHub.get(fwd.WsID)
+			if twsConn == nil {
+				continue
+			}
+			msgBytes, err := base64Decode(fwd.Message)
+			if err != nil {
+				continue
+			}
+			twsConn.mobileWs.WriteMessage(websocket.TextMessage, msgBytes)
+
+		case "tunnel_ws_close":
+			// 桌面端请求关闭手机端 WS
+			if peer == nil {
+				continue
+			}
+			var cls struct {
+				WsID string `json:"ws_id"`
+			}
+			json.Unmarshal(msg.Data, &cls)
+			if cls.WsID != "" {
+				tunnelWsHub.unregister(cls.WsID)
+			}
+
 		case "heartbeat":
 			if peer != nil {
 				peer.lastSeen = time.Now()
@@ -415,6 +500,290 @@ func jsonRaw(v interface{}) json.RawMessage {
 	return b
 }
 
+// ─── HTTP 隧道（H5 远程访问反向代理）──────────────────────────────
+
+// TunnelRequest 通过 WS 发给桌面端的 HTTP 请求
+type TunnelRequest struct {
+	RequestID string            `json:"request_id"`
+	Method    string            `json:"method"`
+	Path      string            `json:"path"`
+	Headers   map[string]string `json:"headers"`
+	Body      string            `json:"body,omitempty"` // base64
+}
+
+// TunnelResponse 桌面端通过 WS 返回的 HTTP 响应
+type TunnelResponse struct {
+	RequestID  string            `json:"request_id"`
+	StatusCode int               `json:"status_code"`
+	Headers    map[string]string `json:"headers"`
+	Body       string            `json:"body,omitempty"` // base64
+}
+
+// tunnelHub 管理隧道注册（instance_id → tunnel token 映射）
+type TunnelHub struct {
+	mu      sync.RWMutex
+	tunnels map[string]*TunnelInfo // key: tunnel_token
+}
+
+type TunnelInfo struct {
+	InstanceID string
+	Token      string
+	peer       *PeerInfo
+	pending    sync.Map // request_id → chan *TunnelResponse
+}
+
+var tunnelHub = &TunnelHub{tunnels: make(map[string]*TunnelInfo)}
+
+func (th *TunnelHub) register(token, instanceID string, peer *PeerInfo) {
+	th.mu.Lock()
+	th.tunnels[token] = &TunnelInfo{InstanceID: instanceID, Token: token, peer: peer}
+	th.mu.Unlock()
+	log.Printf("[tunnel] registered: instance=%s token=%s", instanceID, token[:8]+"...")
+}
+
+func (th *TunnelHub) unregister(instanceID string) {
+	th.mu.Lock()
+	for token, info := range th.tunnels {
+		if info.InstanceID == instanceID {
+			delete(th.tunnels, token)
+			log.Printf("[tunnel] unregistered: instance=%s", instanceID)
+		}
+		_ = token
+	}
+	th.mu.Unlock()
+}
+
+func (th *TunnelHub) get(token string) *TunnelInfo {
+	th.mu.RLock()
+	defer th.mu.RUnlock()
+	return th.tunnels[token]
+}
+
+// handleTunnelHTTP 处理手机端发来的 HTTP 请求，转发给桌面端
+func handleTunnelHTTP(w http.ResponseWriter, r *http.Request) {
+	// URL: /tunnel/<token>/<path>
+	parts := strings.SplitN(strings.TrimPrefix(r.URL.Path, "/tunnel/"), "/", 2)
+	if len(parts) < 1 || parts[0] == "" {
+		http.Error(w, "invalid tunnel URL", http.StatusBadRequest)
+		return
+	}
+	token := parts[0]
+	subPath := "/"
+	if len(parts) > 1 {
+		subPath = "/" + parts[1]
+	}
+	if r.URL.RawQuery != "" {
+		subPath += "?" + r.URL.RawQuery
+	}
+
+	info := tunnelHub.get(token)
+	if info == nil {
+		http.Error(w, "tunnel not found or offline", http.StatusBadGateway)
+		return
+	}
+
+	// 检查 peer 是否在线
+	peer := hub.getPeer(info.InstanceID)
+	if peer == nil {
+		http.Error(w, "desktop offline", http.StatusBadGateway)
+		return
+	}
+
+	// 检测 WebSocket 升级请求
+	if isWebSocketUpgrade(r) {
+		handleTunnelWebSocket(w, r, token, subPath, info, peer)
+		return
+	}
+
+	// 读取请求体
+	var bodyB64 string
+	if r.Body != nil {
+		bodyBytes, err := io.ReadAll(io.LimitReader(r.Body, 10<<20)) // 10MB limit
+		if err == nil && len(bodyBytes) > 0 {
+			bodyB64 = base64Encode(bodyBytes)
+		}
+	}
+
+	// 收集请求头
+	headers := make(map[string]string)
+	for k, vs := range r.Header {
+		if len(vs) > 0 {
+			headers[k] = vs[0]
+		}
+	}
+	headers["X-Forwarded-For"] = r.RemoteAddr
+	headers["X-Forwarded-Proto"] = "https"
+
+	// 生成请求 ID
+	reqID := fmt.Sprintf("%d-%d", time.Now().UnixNano(), time.Now().UnixMicro()%10000)
+
+	// 创建响应通道
+	respCh := make(chan *TunnelResponse, 1)
+	info.pending.Store(reqID, respCh)
+	defer info.pending.Delete(reqID)
+
+	// 通过 WS 发送请求给桌面端
+	tunnelReq := TunnelRequest{
+		RequestID: reqID,
+		Method:    r.Method,
+		Path:      subPath,
+		Headers:   headers,
+		Body:      bodyB64,
+	}
+	reqData, _ := json.Marshal(tunnelReq)
+	peer.enqueueJSON(SignalMessage{
+		Type: "tunnel_request",
+		Data: json.RawMessage(reqData),
+	})
+
+	// 等待桌面端响应（超时 30 秒）
+	select {
+	case resp := <-respCh:
+		for k, v := range resp.Headers {
+			w.Header().Set(k, v)
+		}
+		w.WriteHeader(resp.StatusCode)
+		if resp.Body != "" {
+			bodyBytes, _ := base64Decode(resp.Body)
+			w.Write(bodyBytes)
+		}
+	case <-time.After(30 * time.Second):
+		http.Error(w, "tunnel timeout", http.StatusGatewayTimeout)
+	}
+}
+
+func isWebSocketUpgrade(r *http.Request) bool {
+	return strings.EqualFold(r.Header.Get("Upgrade"), "websocket") &&
+		strings.Contains(strings.ToLower(r.Header.Get("Connection")), "upgrade")
+}
+
+// ─── WebSocket 隧道代理 ────────────────────────────────────────────
+
+// tunnelWsHub 管理通过隧道桥接的 WebSocket 连接
+type TunnelWsHub struct {
+	mu    sync.RWMutex
+	conns map[string]*TunnelWsConn // wsID → conn
+}
+
+type TunnelWsConn struct {
+	wsID     string
+	mobileWs *websocket.Conn
+	closeCh  chan struct{}
+}
+
+var tunnelWsHub = &TunnelWsHub{conns: make(map[string]*TunnelWsConn)}
+
+func (h *TunnelWsHub) register(wsID string, conn *TunnelWsConn) {
+	h.mu.Lock()
+	h.conns[wsID] = conn
+	h.mu.Unlock()
+}
+
+func (h *TunnelWsHub) unregister(wsID string) {
+	h.mu.Lock()
+	if c, ok := h.conns[wsID]; ok {
+		select {
+		case <-c.closeCh:
+		default:
+			close(c.closeCh)
+		}
+		delete(h.conns, wsID)
+	}
+	h.mu.Unlock()
+}
+
+func (h *TunnelWsHub) get(wsID string) *TunnelWsConn {
+	h.mu.RLock()
+	defer h.mu.RUnlock()
+	return h.conns[wsID]
+}
+
+// handleTunnelWebSocket 处理通过隧道代理的 WebSocket 连接
+func handleTunnelWebSocket(w http.ResponseWriter, r *http.Request, token, subPath string, info *TunnelInfo, peer *PeerInfo) {
+	// 升级手机端连接
+	mobileConn, err := upgrader.Upgrade(w, r, nil)
+	if err != nil {
+		log.Printf("[tunnel-ws] upgrade error: %v", err)
+		return
+	}
+
+	wsID := fmt.Sprintf("tws-%d-%d", time.Now().UnixNano(), time.Now().UnixMicro()%10000)
+	twsConn := &TunnelWsConn{
+		wsID:     wsID,
+		mobileWs: mobileConn,
+		closeCh:  make(chan struct{}),
+	}
+	tunnelWsHub.register(wsID, twsConn)
+
+	defer func() {
+		tunnelWsHub.unregister(wsID)
+		mobileConn.Close()
+		// 通知桌面端关闭对应的本地 WS
+		closeData, _ := json.Marshal(map[string]string{"ws_id": wsID})
+		peer.enqueueJSON(SignalMessage{
+			Type: "tunnel_ws_close",
+			Data: json.RawMessage(closeData),
+		})
+	}()
+
+	// 通知桌面端打开一个到本地的 WS 连接
+	openData, _ := json.Marshal(map[string]string{
+		"ws_id": wsID,
+		"path":  subPath,
+	})
+	peer.enqueueJSON(SignalMessage{
+		Type: "tunnel_ws_open",
+		Data: json.RawMessage(openData),
+	})
+
+	// 启动 ping ticker 防止 NAT/防火墙超时断开隧道 WS
+	pingDone := make(chan struct{})
+	go func() {
+		ticker := time.NewTicker(30 * time.Second)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ticker.C:
+				if err := mobileConn.WriteControl(
+					websocket.PingMessage, nil, time.Now().Add(5*time.Second),
+				); err != nil {
+					return
+				}
+			case <-twsConn.closeCh:
+				return
+			case <-pingDone:
+				return
+			}
+		}
+	}()
+
+	// 读取手机端发来的 WS 消息，转发给桌面端
+	for {
+		_, msgBytes, err := mobileConn.ReadMessage()
+		if err != nil {
+			break
+		}
+		// 转发给桌面端
+		fwdData, _ := json.Marshal(map[string]string{
+			"ws_id":   wsID,
+			"message": base64Encode(msgBytes),
+		})
+		peer.enqueueJSON(SignalMessage{
+			Type: "tunnel_ws_message",
+			Data: json.RawMessage(fwdData),
+		})
+	}
+	close(pingDone)
+}
+
+func base64Encode(data []byte) string {
+	return base64Encoding.EncodeToString(data)
+}
+
+func base64Decode(s string) ([]byte, error) {
+	return base64Encoding.DecodeString(s)
+}
+
 // ─── HTTP 端点 ───────────────────────────────────────────────────
 
 func handlePeers(w http.ResponseWriter, r *http.Request) {
@@ -422,12 +791,275 @@ func handlePeers(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(hub.listOnlinePeers())
 }
 
+// ─── FCM 推送 ────────────────────────────────────────────────────
+
+// ─── FCM v1 API（OAuth2 Service Account） ───────────────────────────
+
+// fcmTokenCache 缓存 OAuth2 access token
+var fcmTokenCache struct {
+	mu          sync.Mutex
+	accessToken string
+	expiresAt   time.Time
+}
+
+// serviceAccountJSON 从环境变量解析 Firebase service account
+type serviceAccount struct {
+	Type         string `json:"type"`
+	ProjectID    string `json:"project_id"`
+	ClientEmail  string `json:"client_email"`
+	PrivateKey   string `json:"private_key"`
+	TokenURI     string `json:"token_uri"`
+}
+
+// base64urlEncode 不填充的 base64url 编码
+func base64urlEncode(data []byte) string {
+	return strings.TrimRight(base64.URLEncoding.EncodeToString(data), "=")
+}
+
+// getServiceAccount 从环境变量解析 Firebase service account
+// 优先使用 FCM_SERVICE_ACCOUNT_JSON（内联 JSON），回退到 FCM_SERVICE_ACCOUNT_FILE（文件路径）
+func getServiceAccount() (*serviceAccount, error) {
+	raw := os.Getenv("FCM_SERVICE_ACCOUNT_JSON")
+	if raw == "" {
+		path := os.Getenv("FCM_SERVICE_ACCOUNT_FILE")
+		if path != "" {
+			b, err := os.ReadFile(path)
+			if err != nil {
+				return nil, fmt.Errorf("read service account file: %w", err)
+			}
+			raw = string(b)
+		}
+	}
+	if raw == "" {
+		return nil, fmt.Errorf("FCM_SERVICE_ACCOUNT_JSON or FCM_SERVICE_ACCOUNT_FILE not set")
+	}
+	var sa serviceAccount
+	if err := json.Unmarshal([]byte(raw), &sa); err != nil {
+		return nil, fmt.Errorf("parse service account: %w", err)
+	}
+	return &sa, nil
+}
+
+// signJWT 使用 RSA 私钥签名 JWT
+func signJWT(sa *serviceAccount) (string, error) {
+	now := time.Now()
+	header := base64urlEncode([]byte(`{"alg":"RS256","typ":"JWT"}`))
+
+	claims := map[string]interface{}{
+		"iss":   sa.ClientEmail,
+		"scope": "https://www.googleapis.com/auth/firebase.messaging",
+		"aud":   sa.TokenURI,
+		"iat":   now.Unix(),
+		"exp":   now.Add(3600 * time.Second).Unix(),
+	}
+	claimsJSON, _ := json.Marshal(claims)
+	payload := base64urlEncode(claimsJSON)
+
+	signingInput := header + "." + payload
+
+	// Firebase console 导出的 private_key 中 \n 可能是字面字符串而非换行符
+	privateKey := strings.ReplaceAll(sa.PrivateKey, "\\n", "\n")
+	block, _ := pem.Decode([]byte(privateKey))
+	if block == nil {
+		return "", fmt.Errorf("failed to decode PEM block")
+	}
+	key, err := x509.ParsePKCS8PrivateKey(block.Bytes)
+	if err != nil {
+		return "", fmt.Errorf("parse private key: %w", err)
+	}
+	rsaKey, ok := key.(*rsa.PrivateKey)
+	if !ok {
+		return "", fmt.Errorf("not an RSA private key")
+	}
+
+	hashed := sha256.Sum256([]byte(signingInput))
+	sig, err := rsa.SignPKCS1v15(nil, rsaKey, crypto.SHA256, hashed[:])
+	if err != nil {
+		return "", fmt.Errorf("sign: %w", err)
+	}
+
+	return signingInput + "." + base64urlEncode(sig), nil
+}
+
+// getFCMAccessToken 获取或刷新 OAuth2 access token
+func getFCMAccessToken() (string, error) {
+	fcmTokenCache.mu.Lock()
+	defer fcmTokenCache.mu.Unlock()
+
+	if fcmTokenCache.accessToken != "" && time.Now().Before(fcmTokenCache.expiresAt.Add(-60*time.Second)) {
+		return fcmTokenCache.accessToken, nil
+	}
+
+	sa, err := getServiceAccount()
+	if err != nil {
+		return "", err
+	}
+
+	jwt, err := signJWT(sa)
+	if err != nil {
+		return "", err
+	}
+
+	tokenURI := sa.TokenURI
+	if tokenURI == "" {
+		tokenURI = "https://oauth2.googleapis.com/token"
+	}
+
+	resp, err := http.PostForm(tokenURI, url.Values{
+		"grant_type": {"urn:ietf:params:oauth:grant-type:jwt-bearer"},
+		"assertion":  {jwt},
+	})
+	if err != nil {
+		return "", fmt.Errorf("token request: %w", err)
+	}
+	defer resp.Body.Close()
+
+	var tokenResp struct {
+		AccessToken string `json:"access_token"`
+		ExpiresIn   int    `json:"expires_in"`
+		TokenType   string `json:"token_type"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&tokenResp); err != nil {
+		return "", fmt.Errorf("decode token response: %w", err)
+	}
+	if tokenResp.AccessToken == "" {
+		return "", fmt.Errorf("empty access token, status=%d", resp.StatusCode)
+	}
+
+	fcmTokenCache.accessToken = tokenResp.AccessToken
+	fcmTokenCache.expiresAt = time.Now().Add(time.Duration(tokenResp.ExpiresIn) * time.Second)
+
+	log.Printf("[fcm-v1] obtained access token, expires in %ds", tokenResp.ExpiresIn)
+	return tokenResp.AccessToken, nil
+}
+
+// sendFCMv1 使用 FCM HTTP v1 API 发送推送
+func sendFCMv1(projectID, accessToken, deviceToken, title, body string, data map[string]string) error {
+	msg := map[string]interface{}{
+		"message": map[string]interface{}{
+			"token": deviceToken,
+			"notification": map[string]string{
+				"title": title,
+				"body":  body,
+			},
+			"android": map[string]interface{}{
+				"priority": "high",
+				"notification": map[string]string{
+					"sound": "default",
+				},
+			},
+			"apns": map[string]interface{}{
+				"payload": map[string]interface{}{
+					"aps": map[string]interface{}{
+						"sound":            "default",
+						"content-available": 1,
+					},
+				},
+			},
+		},
+	}
+	if len(data) > 0 {
+		msg["message"].(map[string]interface{})["data"] = data
+	}
+
+	b, _ := json.Marshal(msg)
+	apiURL := fmt.Sprintf("https://fcm.googleapis.com/v1/projects/%s/messages:send", projectID)
+	req, _ := http.NewRequest("POST", apiURL, strings.NewReader(string(b)))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+accessToken)
+
+	client := &http.Client{Timeout: 10 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		log.Printf("[fcm-v1] send error: %v", err)
+		return err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != 200 {
+		respBody, _ := io.ReadAll(resp.Body)
+		log.Printf("[fcm-v1] send failed status=%d body=%s", resp.StatusCode, string(respBody))
+		return fmt.Errorf("fcm-v1 status %d", resp.StatusCode)
+	}
+	tokenPreview := deviceToken
+	if len(tokenPreview) > 12 {
+		tokenPreview = tokenPreview[:8] + "..." + tokenPreview[len(tokenPreview)-4:]
+	}
+	log.Printf("[fcm-v1] sent to token=%s", tokenPreview)
+	return nil
+}
+
+// handlePush 接收来自 PC 端的推送请求，转发到 FCM v1
+// POST /push
+// Header: Authorization: Bearer <pc_secret>
+// Body: { "tokens": ["fcm_token1", ...], "title": "...", "body": "...", "data": {...} }
+func handlePush(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	pcSecret := os.Getenv("PUSH_SECRET")
+	if pcSecret == "" {
+		http.Error(w, "push not configured", http.StatusServiceUnavailable)
+		return
+	}
+	authHeader := r.Header.Get("Authorization")
+	if authHeader == "" || !strings.HasPrefix(authHeader, "Bearer ") || authHeader[7:] != pcSecret {
+		http.Error(w, "unauthorized", http.StatusUnauthorized)
+		return
+	}
+
+	// FCM v1 API 需要 service account
+	accessToken, err := getFCMAccessToken()
+	if err != nil {
+		log.Printf("[push] FCM access token error: %v", err)
+		http.Error(w, "FCM not configured: "+err.Error(), http.StatusServiceUnavailable)
+		return
+	}
+
+	sa, _ := getServiceAccount()
+	if sa == nil || sa.ProjectID == "" {
+		http.Error(w, "FCM project_id not found in service account", http.StatusServiceUnavailable)
+		return
+	}
+
+	var req struct {
+		Tokens []string          `json:"tokens"`
+		Title  string            `json:"title"`
+		Body   string            `json:"body"`
+		Data   map[string]string `json:"data"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "invalid body", http.StatusBadRequest)
+		return
+	}
+	if len(req.Tokens) == 0 {
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]interface{}{"sent": 0})
+		return
+	}
+
+	sent := 0
+	for _, token := range req.Tokens {
+		if sendFCMv1(sa.ProjectID, accessToken, token, req.Title, req.Body, req.Data) == nil {
+			sent++
+		}
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{"sent": sent, "total": len(req.Tokens)})
+}
+
 func handleHealth(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	hub.mu.RLock()
 	count := len(hub.peers)
 	hub.mu.RUnlock()
-	json.NewEncoder(w).Encode(map[string]interface{}{"ok": true, "online": count})
+	tunnelHub.mu.RLock()
+	tunnelCount := len(tunnelHub.tunnels)
+	tunnelHub.mu.RUnlock()
+	json.NewEncoder(w).Encode(map[string]interface{}{"ok": true, "online": count, "tunnels": tunnelCount})
 }
 
 func main() {
@@ -439,17 +1071,19 @@ func main() {
 	http.HandleFunc("/ws", handleWS)
 	http.HandleFunc("/api/peers", handlePeers)
 	http.HandleFunc("/health", handleHealth)
+	http.HandleFunc("/push", handlePush)
+	http.HandleFunc("/tunnel/", handleTunnelHTTP)
 
 	tlsCert := os.Getenv("TLS_CERT")
 	tlsKey := os.Getenv("TLS_KEY")
 
 	if tlsCert != "" && tlsKey != "" {
-		log.Printf("[signaling] server starting on :%s (TLS/WSS)", port)
+		log.Printf("[signaling] server starting on :%s (TLS/WSS, tunnel enabled)", port)
 		if err := http.ListenAndServeTLS(":"+port, tlsCert, tlsKey, nil); err != nil {
 			log.Fatalf("[signaling] server error: %v", err)
 		}
 	} else {
-		log.Printf("[signaling] server starting on :%s (plain WS, set TLS_CERT & TLS_KEY for WSS)", port)
+		log.Printf("[signaling] server starting on :%s (plain WS, tunnel enabled, set TLS_CERT & TLS_KEY for WSS)", port)
 		if err := http.ListenAndServe(":"+port, nil); err != nil {
 			log.Fatalf("[signaling] server error: %v", err)
 		}

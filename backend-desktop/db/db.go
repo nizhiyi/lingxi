@@ -6,6 +6,7 @@ import (
 	"os"
 
 	"lingxi-agent/config"
+	"lingxi-agent/crypto"
 
 	_ "github.com/ncruces/go-sqlite3/driver"
 	_ "github.com/ncruces/go-sqlite3/embed"
@@ -200,6 +201,40 @@ func migrate() {
 			created_at      DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
 			updated_at      DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
 		)`,
+		// ── 飞书监听模式 ─────────────────────────────────────────────
+		`CREATE TABLE IF NOT EXISTS feishu_monitor_rules (
+			id              INTEGER PRIMARY KEY AUTOINCREMENT,
+			connector_id    INTEGER NOT NULL,
+			name            TEXT    NOT NULL DEFAULT '',
+			enabled         INTEGER NOT NULL DEFAULT 1,
+			chat_ids        TEXT    NOT NULL DEFAULT '[]',
+			sender_ids      TEXT    NOT NULL DEFAULT '[]',
+			exclude_bot_msg INTEGER NOT NULL DEFAULT 1,
+			msg_types       TEXT    NOT NULL DEFAULT '[]',
+			keywords        TEXT    NOT NULL DEFAULT '[]',
+			keyword_mode    TEXT    NOT NULL DEFAULT 'any',
+			action_type     TEXT    NOT NULL DEFAULT 'reply_original',
+			action_target   TEXT    NOT NULL DEFAULT '',
+			custom_prompt   TEXT    NOT NULL DEFAULT '',
+			priority        INTEGER NOT NULL DEFAULT 0,
+			created_at      DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+			updated_at      DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+		)`,
+		`CREATE TABLE IF NOT EXISTS feishu_monitor_logs (
+			id              INTEGER PRIMARY KEY AUTOINCREMENT,
+			connector_id    INTEGER NOT NULL,
+			rule_id         INTEGER NOT NULL DEFAULT 0,
+			rule_name       TEXT    NOT NULL DEFAULT '',
+			chat_id         TEXT    NOT NULL DEFAULT '',
+			sender_id       TEXT    NOT NULL DEFAULT '',
+			sender_name     TEXT    NOT NULL DEFAULT '',
+			message_text    TEXT    NOT NULL DEFAULT '',
+			action_type     TEXT    NOT NULL DEFAULT '',
+			action_target   TEXT    NOT NULL DEFAULT '',
+			result          TEXT    NOT NULL DEFAULT '',
+			error_msg       TEXT    NOT NULL DEFAULT '',
+			created_at      DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+		)`,
 	}
 	for _, s := range stmts {
 		if _, err := DB.Exec(s); err != nil {
@@ -339,6 +374,8 @@ func migrate() {
 	// 列级迁移：im_connectors 多实例支持
 	addColumnIfMissing("im_connectors", "name", "TEXT NOT NULL DEFAULT ''")
 	addColumnIfMissing("im_connectors", "agent_id", "INTEGER NOT NULL DEFAULT 0")
+	// 监听规则：回复前缀模板（可配置 Agent 回复时的开头引导语）
+	addColumnIfMissing("feishu_monitor_rules", "reply_prefix", "TEXT NOT NULL DEFAULT ''")
 	// 移除旧的 platform 唯一索引（如果存在），允许同平台多实例
 	DB.Exec(`DROP INDEX IF EXISTS sqlite_autoindex_im_connectors_1`)
 
@@ -473,8 +510,6 @@ func migrate() {
 	// ── 群聊 Agent 人格 ──────────────────────────────────────────
 	MigrateAgentPersonality()
 
-	// ── 权限审批 ────────────────────────────────────────────────
-	MigratePermission()
 
 	// ── H5 远程访问 ─────────────────────────────────────────────
 	MigrateH5Access()
@@ -580,19 +615,215 @@ func migrate() {
 		)`)
 		recordMigration(7, "coding_agents – custom sub-agent templates for Coding View")
 	}
+	if v < 8 {
+		migrateSecretsToAESGCM()
+		recordMigration(8, "encrypt secrets – AES-GCM encrypt im_connectors.config, oauth_configs.app_secret, kv push_secret")
+	}
+	if v < 9 {
+		DB.Exec(`CREATE TABLE IF NOT EXISTS p2p_watch_targets (
+			id                INTEGER PRIMARY KEY AUTOINCREMENT,
+			connector_id      INTEGER NOT NULL DEFAULT 0,
+			chat_id           TEXT    NOT NULL DEFAULT '',
+			chat_name         TEXT    NOT NULL DEFAULT '',
+			enabled           INTEGER NOT NULL DEFAULT 1,
+			poll_interval_sec INTEGER NOT NULL DEFAULT 20,
+			last_seen_msg_id  TEXT    NOT NULL DEFAULT '',
+			created_at        DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+			updated_at        DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+		)`)
+		recordMigration(9, "p2p_watch_targets – P2P bot message monitoring targets")
+	}
+	if v < 10 {
+		addColumnIfMissing("agents", "env_vars", `TEXT NOT NULL DEFAULT '{}'`)
+		recordMigration(10, "agents.env_vars – runtime environment variables for skill scripts")
+	}
+	if v < 11 {
+		DB.Exec(`CREATE TABLE IF NOT EXISTS im_reply_sessions (
+			id               INTEGER PRIMARY KEY AUTOINCREMENT,
+			platform_msg_id  TEXT    NOT NULL UNIQUE,
+			session_id       INTEGER NOT NULL,
+			created_at       DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+		)`)
+		DB.Exec(`CREATE INDEX IF NOT EXISTS idx_im_reply_sessions_msg ON im_reply_sessions(platform_msg_id)`)
+		recordMigration(11, "im_reply_sessions – map bot reply msg_id to session_id for reply-chain context")
+	}
+	if v < 12 {
+		DB.Exec(`CREATE TABLE IF NOT EXISTS feishu_task_instances (
+			id                     INTEGER PRIMARY KEY AUTOINCREMENT,
+			rule_id                INTEGER NOT NULL DEFAULT 0,
+			connector_id           INTEGER NOT NULL DEFAULT 0,
+			source_chat_id         TEXT    NOT NULL DEFAULT '',
+			target_chat_id         TEXT    NOT NULL DEFAULT '',
+			trigger_msg_id         TEXT    NOT NULL DEFAULT '',
+			trigger_content        TEXT    NOT NULL DEFAULT '',
+			trigger_sender_id      TEXT    NOT NULL DEFAULT '',
+			trigger_sender_name    TEXT    NOT NULL DEFAULT '',
+			root_message_id        TEXT    NOT NULL DEFAULT '',
+			thread_id              TEXT    NOT NULL DEFAULT '',
+			streaming_card_id      TEXT    NOT NULL DEFAULT '',
+			streaming_element_id   TEXT    NOT NULL DEFAULT 'stream_md_01',
+			streaming_sequence     INTEGER NOT NULL DEFAULT 0,
+			progress_msg_id        TEXT    NOT NULL DEFAULT '',
+			status                 TEXT    NOT NULL DEFAULT 'CREATED',
+			dispatch_targets       TEXT    NOT NULL DEFAULT '[]',
+			dispatch_history       TEXT    NOT NULL DEFAULT '{"rounds":[]}',
+			accumulated_context    TEXT    NOT NULL DEFAULT '',
+			current_round          INTEGER NOT NULL DEFAULT 0,
+			max_rounds             INTEGER NOT NULL DEFAULT 10,
+			reply_timeout_minutes  INTEGER NOT NULL DEFAULT 10,
+			reply_debounce_seconds INTEGER NOT NULL DEFAULT 30,
+			error_msg              TEXT    NOT NULL DEFAULT '',
+			created_at             DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+			updated_at             DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+		)`)
+		DB.Exec(`CREATE INDEX IF NOT EXISTS idx_feishu_task_root_msg ON feishu_task_instances(root_message_id)`)
+		DB.Exec(`CREATE INDEX IF NOT EXISTS idx_feishu_task_thread ON feishu_task_instances(thread_id)`)
+		DB.Exec(`CREATE INDEX IF NOT EXISTS idx_feishu_task_status ON feishu_task_instances(status)`)
+		addColumnIfMissing("feishu_monitor_rules", "target_chat_id", "TEXT NOT NULL DEFAULT ''")
+		addColumnIfMissing("feishu_monitor_rules", "dispatch_targets", "TEXT NOT NULL DEFAULT '[]'")
+		addColumnIfMissing("feishu_monitor_rules", "completion_strategy", "TEXT NOT NULL DEFAULT 'debounce'")
+		addColumnIfMissing("feishu_monitor_rules", "max_rounds", "INTEGER NOT NULL DEFAULT 10")
+		addColumnIfMissing("feishu_monitor_rules", "reply_timeout_minutes", "INTEGER NOT NULL DEFAULT 10")
+		addColumnIfMissing("feishu_monitor_rules", "reply_debounce_seconds", "INTEGER NOT NULL DEFAULT 30")
+		recordMigration(12, "feishu_task_instances table + feishu_monitor_rules agent_teams columns")
+	}
+
+	if v < 13 {
+		// 重建 im_connectors 表去掉 platform 列的 UNIQUE 约束，允许同平台多实例
+		_, err := DB.Exec(`
+			CREATE TABLE IF NOT EXISTS im_connectors_new (
+				id         INTEGER PRIMARY KEY AUTOINCREMENT,
+				name       TEXT    NOT NULL DEFAULT '',
+				platform   TEXT    NOT NULL,
+				agent_id   INTEGER NOT NULL DEFAULT 0,
+				enabled    INTEGER NOT NULL DEFAULT 0,
+				config     TEXT    NOT NULL DEFAULT '{}',
+				created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+				updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+			)`)
+		if err == nil {
+			DB.Exec(`INSERT INTO im_connectors_new (id, name, platform, agent_id, enabled, config, created_at, updated_at)
+				SELECT id, name, platform, agent_id, enabled, config, created_at, updated_at FROM im_connectors`)
+			DB.Exec(`DROP TABLE im_connectors`)
+			DB.Exec(`ALTER TABLE im_connectors_new RENAME TO im_connectors`)
+		}
+		recordMigration(13, "im_connectors remove platform UNIQUE constraint – allow multiple connectors per platform")
+	}
 }
 
-// seedBuiltinAgent 插入内置「通用助理」agent（id=1）
+// migrateSecretsToAESGCM 加密所有明文存储的密钥（一次性迁移）
+// 注意：必须先收集所有待加密记录再关闭 rows，然后再执行 UPDATE，
+// 否则 SQLite 在 rows 迭代期间执行写操作会导致锁死。
+func migrateSecretsToAESGCM() {
+	var migrated int
+
+	type idVal struct {
+		id  int64
+		val string
+	}
+
+	// 1. im_connectors.config — 先收集再更新
+	var connectors []idVal
+	rows, err := DB.Query(`SELECT id, config FROM im_connectors WHERE config != '' AND config NOT LIKE 'enc:v1:%'`)
+	if err == nil {
+		for rows.Next() {
+			var item idVal
+			if rows.Scan(&item.id, &item.val) == nil {
+				connectors = append(connectors, item)
+			}
+		}
+		rows.Close()
+	}
+	for _, item := range connectors {
+		if encrypted, e := crypto.Encrypt(item.val); e == nil {
+			DB.Exec(`UPDATE im_connectors SET config=? WHERE id=?`, encrypted, item.id)
+			migrated++
+		}
+	}
+
+	// 2. oauth_configs.app_secret — 先收集再更新
+	var oauthConfigs []idVal
+	rows2, err := DB.Query(`SELECT id, app_secret FROM oauth_configs WHERE app_secret != '' AND app_secret NOT LIKE 'enc:v1:%'`)
+	if err == nil {
+		for rows2.Next() {
+			var item idVal
+			if rows2.Scan(&item.id, &item.val) == nil {
+				oauthConfigs = append(oauthConfigs, item)
+			}
+		}
+		rows2.Close()
+	}
+	for _, item := range oauthConfigs {
+		if encrypted, e := crypto.Encrypt(item.val); e == nil {
+			DB.Exec(`UPDATE oauth_configs SET app_secret=? WHERE id=?`, encrypted, item.id)
+			migrated++
+		}
+	}
+
+	// 3. kv_store push_secret
+	var pushSecret string
+	if DB.QueryRow(`SELECT value FROM kv_store WHERE key='push_secret' AND value != '' AND value NOT LIKE 'enc:v1:%'`).Scan(&pushSecret) == nil {
+		if encrypted, e := crypto.Encrypt(pushSecret); e == nil {
+			DB.Exec(`UPDATE kv_store SET value=? WHERE key='push_secret'`, encrypted)
+			migrated++
+		}
+	}
+
+	if migrated > 0 {
+		slog.Info("[migration-8] encrypted secrets", "count", migrated)
+	}
+}
+
+// seedBuiltinAgent 插入内置预置 Agent（幂等：仅当没有 builtin Agent 时才插入）
 func seedBuiltinAgent() {
 	var cnt int
 	DB.QueryRow(`SELECT COUNT(1) FROM agents WHERE builtin=1`).Scan(&cnt)
 	if cnt > 0 {
 		return
 	}
-	_, err := DB.Exec(`INSERT INTO agents (name, avatar, description, system_prompt, allow_all, builtin)
-		VALUES ('通用助理', '✦', '默认通用智能助理，开箱即用、无任何限制。', '', 1, 1)`)
-	if err != nil {
-		slog.Warn("seed builtin agent error", "err", err)
+
+	type seed struct {
+		name, avatar, desc, prompt string
+	}
+	seeds := []seed{
+		{
+			name:   "通用助理",
+			avatar: "✦",
+			desc:   "默认通用智能助理，开箱即用、无任何限制。",
+			prompt: "",
+		},
+		{
+			name:   "写作搭档",
+			avatar: "✍️",
+			desc:   "帮你润色文案、撰写邮件、创作内容，支持多种文体风格。",
+			prompt: "你是一位专业的中文写作助手。擅长润色、改写、续写各类文本。回答时注重文字的优美和逻辑性。根据用户需求调整风格（正式/活泼/学术/商务）。",
+		},
+		{
+			name:   "翻译专家",
+			avatar: "🌐",
+			desc:   "中英日韩多语言互译，保留原文语气和专业术语。",
+			prompt: "你是一位精通中、英、日、韩四种语言的翻译专家。翻译时保留原文的语气、风格和专业术语。如果用户没有指定目标语言，默认将中文翻译为英文、将外文翻译为中文。",
+		},
+		{
+			name:   "学习教练",
+			avatar: "🎓",
+			desc:   "用通俗易懂的方式解释复杂概念，帮你高效学习新知识。",
+			prompt: "你是一位耐心的学习教练。善于用类比、举例、分步讲解的方式帮助用户理解复杂概念。回答时先给出简短总结，再展开详细解释。鼓励用户提问。",
+		},
+		{
+			name:   "创意伙伴",
+			avatar: "💡",
+			desc:   "头脑风暴、创意发散、方案构思，激发你的灵感。",
+			prompt: "你是一位富有创造力的思维伙伴。擅长头脑风暴、发散思维、跨界联想。回答时提供多个不同角度的方案或创意，用简洁有力的方式表达。不要自我审查，大胆提出非常规想法。",
+		},
+	}
+
+	for _, s := range seeds {
+		_, err := DB.Exec(`INSERT INTO agents (name, avatar, description, system_prompt, allow_all, builtin, evolution_enabled) VALUES (?, ?, ?, ?, 1, 1, 1)`,
+			s.name, s.avatar, s.desc, s.prompt)
+		if err != nil {
+			slog.Warn("seed builtin agent error", "name", s.name, "err", err)
+		}
 	}
 }
 

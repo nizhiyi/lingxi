@@ -20,10 +20,13 @@ type DingtalkConfig struct {
 
 // DingtalkConnector 实现钉钉 Stream 模式机器人
 type DingtalkConnector struct {
-	cfg    DingtalkConfig
-	cli    *streamclient.StreamClient
-	cancel context.CancelFunc
+	cfg     DingtalkConfig
+	cli     *streamclient.StreamClient
+	cancel  context.CancelFunc
+	agentID int64
 }
+
+func (d *DingtalkConnector) SetAgentID(id int64) { d.agentID = id }
 
 func NewDingtalkConnector(configJSON string) (*DingtalkConnector, error) {
 	cfg := DingtalkConfig{BaseConfig: DefaultBaseConfig()}
@@ -89,16 +92,42 @@ func (d *DingtalkConnector) onMessage(ctx context.Context, data *chatbot.BotCall
 		return err
 	}
 
+	// 检测 @所有人：atUsers 中不包含机器人自身时，说明是 @所有人 触发的
+	isMentionAll := false
+	if data.IsInAtList && data.ConversationType == "2" {
+		botInAtList := false
+		for _, u := range data.AtUsers {
+			if u.DingtalkId == data.ChatbotUserId {
+				botInAtList = true
+				break
+			}
+		}
+		if !botInAtList {
+			isMentionAll = true
+		}
+	}
+
+	// 会话类型：钉钉 ConversationType "1"=私聊, "2"=群聊
+	convType := ""
+	if data.ConversationType == "2" {
+		convType = "group"
+	} else if data.ConversationType == "1" {
+		convType = "private"
+	}
+
 	msg := IMMessage{
 		Platform:       "dingtalk",
 		UserID:         data.SenderStaffId,
+		UserName:       data.SenderNick,
 		ConversationID: data.ConversationId,
+		ConvTitle:      data.ConversationTitle,
+		ConvType:       convType,
 		Text:           text,
+		AgentID:        d.agentID,
+		IsMentionAll:   isMentionAll,
 		BaseCfg:        d.cfg.BaseConfig,
 		ReplyFunc:      replyFunc,
 	}
-	// Dispatch 内部会立即回复"收到"，然后异步调用 Claude，
-	// 所以这里直接调用即可（不会阻塞超过钉钉 3 秒限制）
 	Dispatch(msg)
 	return []byte(""), nil
 }

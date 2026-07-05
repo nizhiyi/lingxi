@@ -1,13 +1,17 @@
 package handler
 
 import (
+	"archive/zip"
+	"bytes"
 	"database/sql"
+	"encoding/json"
 	"fmt"
 	"log/slog"
 	"net/http"
 	"os/exec"
 	"strconv"
 	"strings"
+	"time"
 
 	"lingxi-agent/db"
 	"lingxi-agent/model"
@@ -31,7 +35,7 @@ func ListSessions(c *gin.Context) {
 		err  error
 	)
 
-	baseSelect := `SELECT id, title, message_count, COALESCE(agent_id,0), COALESCE(pinned,0), COALESCE(folder,''), COALESCE(permission_mode,'trust'), COALESCE(project_path,''), created_at, updated_at FROM sessions`
+	baseSelect := `SELECT id, title, message_count, COALESCE(agent_id,0), COALESCE(pinned,0), COALESCE(folder,''), COALESCE(permission_mode,'trust'), COALESCE(project_path,''), COALESCE(summary,''), created_at, updated_at FROM sessions`
 	orderBy := ` ORDER BY COALESCE(pinned,0) DESC, updated_at DESC`
 
 	if agentIDStr != "" {
@@ -58,7 +62,7 @@ func ListSessions(c *gin.Context) {
 	sessions := make([]model.Session, 0)
 	for rows.Next() {
 		var s model.Session
-		if err := rows.Scan(&s.ID, &s.Title, &s.MessageCount, &s.AgentID, &s.Pinned, &s.Folder, &s.PermissionMode, &s.ProjectPath, &s.CreatedAt, &s.UpdatedAt); err != nil {
+		if err := rows.Scan(&s.ID, &s.Title, &s.MessageCount, &s.AgentID, &s.Pinned, &s.Folder, &s.PermissionMode, &s.ProjectPath, &s.Summary, &s.CreatedAt, &s.UpdatedAt); err != nil {
 			continue
 		}
 		sessions = append(sessions, s)
@@ -102,15 +106,16 @@ func UpdateSession(c *gin.Context) {
 	}
 
 	var body struct {
-		Title  *string `json:"title"`
-		Pinned *bool   `json:"pinned"`
-		Folder *string `json:"folder"`
+		Title          *string `json:"title"`
+		Pinned         *bool   `json:"pinned"`
+		Folder         *string `json:"folder"`
+		PermissionMode *string `json:"permission_mode"`
 	}
 	if err := c.ShouldBindJSON(&body); err != nil {
 		c.Status(http.StatusBadRequest)
 		return
 	}
-	if body.Title == nil && body.Pinned == nil && body.Folder == nil {
+	if body.Title == nil && body.Pinned == nil && body.Folder == nil && body.PermissionMode == nil {
 		c.Status(http.StatusBadRequest)
 		return
 	}
@@ -127,6 +132,13 @@ func UpdateSession(c *gin.Context) {
 	}
 	if body.Folder != nil {
 		db.DB.Exec(`UPDATE sessions SET folder=? WHERE id=?`, *body.Folder, sessionID)
+	}
+	if body.PermissionMode != nil {
+		mode := *body.PermissionMode
+		if mode != "trust" && mode != "ask" {
+			mode = "trust"
+		}
+		db.DB.Exec(`UPDATE sessions SET permission_mode=? WHERE id=?`, mode, sessionID)
 	}
 	c.Status(http.StatusOK)
 }
@@ -191,10 +203,30 @@ func ListMessages(c *gin.Context) {
 		return
 	}
 
-	rows, err := db.DB.Query(`
-		SELECT id, session_id, role, content, COALESCE(usage,''), COALESCE(feedback,''), COALESCE(pinned,0), created_at
-		FROM messages WHERE session_id=? ORDER BY id ASC
-	`, sessionID)
+	// 分页参数：before_id（光标）+ limit
+	beforeID, _ := strconv.ParseInt(c.Query("before_id"), 10, 64)
+	limit, _ := strconv.Atoi(c.Query("limit"))
+	if limit <= 0 || limit > 200 {
+		limit = 0 // 0 = 不分页，返回全部（向后兼容）
+	}
+
+	var query string
+	var args []interface{}
+	if beforeID > 0 && limit > 0 {
+		query = `SELECT id, session_id, role, content, COALESCE(usage,''), COALESCE(feedback,''), COALESCE(pinned,0), created_at
+			FROM messages WHERE session_id=? AND id < ? ORDER BY id DESC LIMIT ?`
+		args = []interface{}{sessionID, beforeID, limit}
+	} else if limit > 0 {
+		query = `SELECT id, session_id, role, content, COALESCE(usage,''), COALESCE(feedback,''), COALESCE(pinned,0), created_at
+			FROM messages WHERE session_id=? ORDER BY id DESC LIMIT ?`
+		args = []interface{}{sessionID, limit}
+	} else {
+		query = `SELECT id, session_id, role, content, COALESCE(usage,''), COALESCE(feedback,''), COALESCE(pinned,0), created_at
+			FROM messages WHERE session_id=? ORDER BY id ASC`
+		args = []interface{}{sessionID}
+	}
+
+	rows, err := db.DB.Query(query, args...)
 	if err != nil {
 		c.Status(http.StatusInternalServerError)
 		return
@@ -209,6 +241,24 @@ func ListMessages(c *gin.Context) {
 		}
 		msgs = append(msgs, m)
 	}
+
+	// 分页查询是 DESC 排序，需要反转为 ASC
+	if limit > 0 {
+		for i, j := 0, len(msgs)-1; i < j; i, j = i+1, j-1 {
+			msgs[i], msgs[j] = msgs[j], msgs[i]
+		}
+	}
+
+	// 分页模式下返回带 has_more 的结构
+	if limit > 0 {
+		hasMore := len(msgs) == limit
+		c.JSON(http.StatusOK, gin.H{
+			"messages": msgs,
+			"has_more": hasMore,
+		})
+		return
+	}
+
 	c.JSON(http.StatusOK, msgs)
 }
 
@@ -554,4 +604,106 @@ func ForkSession(c *gin.Context) {
 		SELECT ?, role, content, created_at FROM messages WHERE session_id=? ORDER BY id`, newID, srcID)
 
 	c.JSON(http.StatusOK, gin.H{"id": newID, "source_id": srcID})
+}
+
+// BatchExportSessions POST /api/sessions/batch-export
+func BatchExportSessions(c *gin.Context) {
+	var body struct {
+		IDs []int64 `json:"ids"`
+	}
+	if err := c.ShouldBindJSON(&body); err != nil || len(body.IDs) == 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "ids 不能为空"})
+		return
+	}
+
+	buf := new(bytes.Buffer)
+	zw := zip.NewWriter(buf)
+
+	for _, sid := range body.IDs {
+		var title string
+		err := db.DB.QueryRow(`SELECT COALESCE(title,'新对话') FROM sessions WHERE id=?`, sid).Scan(&title)
+		if err != nil {
+			continue
+		}
+
+		rows, err := db.DB.Query(`
+			SELECT role, content, created_at FROM messages WHERE session_id=? ORDER BY id ASC
+		`, sid)
+		if err != nil {
+			continue
+		}
+
+		var lines []string
+		lines = append(lines, fmt.Sprintf("# %s", title))
+		lines = append(lines, "")
+		lines = append(lines, fmt.Sprintf("> 导出时间：%s", time.Now().Format("2006-01-02 15:04:05")))
+		lines = append(lines, "")
+
+		for rows.Next() {
+			var role, content string
+			var createdAt time.Time
+			if err := rows.Scan(&role, &content, &createdAt); err != nil {
+				continue
+			}
+			if role == "user" {
+				lines = append(lines, "## 👤 用户", "")
+				text := content
+				var obj map[string]interface{}
+				if json.Unmarshal([]byte(content), &obj) == nil {
+					if t, ok := obj["text"].(string); ok {
+						text = t
+					}
+				}
+				lines = append(lines, text, "")
+			} else {
+				lines = append(lines, "## 🤖 助理", "")
+				var blocks []map[string]interface{}
+				if json.Unmarshal([]byte(content), &blocks) == nil {
+					for _, b := range blocks {
+						btype, _ := b["type"].(string)
+						btext, _ := b["text"].(string)
+						switch btype {
+						case "text":
+							if btext != "" {
+								lines = append(lines, btext, "")
+							}
+						case "thinking":
+							if btext != "" {
+								lines = append(lines, "<details><summary>思考过程</summary>", "", btext, "", "</details>", "")
+							}
+						case "tool":
+							label, _ := b["label"].(string)
+							name, _ := b["name"].(string)
+							if label == "" {
+								label = name
+							}
+							lines = append(lines, fmt.Sprintf("> 🔧 工具调用: %s", label), "")
+						}
+					}
+				} else {
+					lines = append(lines, content, "")
+				}
+			}
+			lines = append(lines, "---", "")
+		}
+		rows.Close()
+
+		safeTitle := strings.NewReplacer("/", "-", "\\", "-", "?", "", "%", "", "*", "", ":", "-", "|", "-", "\"", "", "<", "", ">", "").Replace(title)
+		if safeTitle == "" {
+			safeTitle = fmt.Sprintf("对话_%d", sid)
+		}
+		filename := fmt.Sprintf("%s_%d.md", safeTitle, sid)
+
+		fw, err := zw.Create(filename)
+		if err != nil {
+			continue
+		}
+		fw.Write([]byte(strings.Join(lines, "\n")))
+	}
+
+	zw.Close()
+
+	dateStr := time.Now().Format("20060102")
+	c.Header("Content-Disposition", fmt.Sprintf(`attachment; filename="灵犀对话导出-%s.zip"`, dateStr))
+	c.Data(http.StatusOK, "application/zip", buf.Bytes())
 }

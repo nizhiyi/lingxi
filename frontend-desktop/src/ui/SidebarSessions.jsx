@@ -1,6 +1,6 @@
 import { useState, useRef, useEffect, useCallback, useMemo } from 'react';
 import { useStore } from '../state/useStore';
-import { Plus, MessageSquare, Trash2, Search, ChevronDown, Sparkles, Settings as SettingsIcon, Pencil, Pin, CheckSquare, Square, X, BookOpen, Shield, ShieldOff } from 'lucide-react';
+import { Plus, MessageSquare, Trash2, Search, ChevronDown, Sparkles, Settings as SettingsIcon, Pencil, Pin, CheckSquare, Square, X, BookOpen, Download, Loader2 } from 'lucide-react';
 import { Input, Button, Modal } from './primitives';
 import { api } from '../api/client';
 import { cn } from './cn';
@@ -47,7 +47,7 @@ function groupSessionsByDate(sessions) {
   return result;
 }
 
-export function SidebarSessions() {
+export function SidebarSessions({ onSessionSelect } = {}) {
   const sessions = useStore((s) => s.sessions);
   const activeId = useStore((s) => s.activeSessionId);
   const setActive = useStore((s) => s.setActiveSession);
@@ -68,6 +68,7 @@ export function SidebarSessions() {
   const [batchMode, setBatchMode] = useState(false);
   const [selected, setSelected] = useState(new Set());
   const [batchDeleteOpen, setBatchDeleteOpen] = useState(false);
+  const [batchExporting, setBatchExporting] = useState(false);
   const filtered = sessions.filter((s) => !q || (s.title || '').toLowerCase().includes(q.toLowerCase()));
   const grouped = useMemo(() => groupSessionsByDate(filtered), [filtered]);
   const currentAgent = agents.find((a) => a.id === activeAgentId) || agents.find((a) => a.builtin) || agents[0];
@@ -96,6 +97,24 @@ export function SidebarSessions() {
     setBatchDeleteOpen(false);
     exitBatchMode();
   }, [selected, batchDeleteSessions, exitBatchMode]);
+
+  const handleBatchExport = useCallback(async () => {
+    if (selected.size === 0 || batchExporting) return;
+    setBatchExporting(true);
+    try {
+      const blob = await api.batchExportSessions(Array.from(selected));
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `灵犀对话导出-${new Date().toISOString().slice(0, 10)}.zip`;
+      a.click();
+      URL.revokeObjectURL(url);
+    } catch (e) {
+      console.error('batch export failed', e);
+    } finally {
+      setBatchExporting(false);
+    }
+  }, [selected, batchExporting]);
 
   const handleConfirmDelete = useCallback(async () => {
     if (deleteTarget) {
@@ -168,15 +187,23 @@ export function SidebarSessions() {
 
       {batchMode ? (
         <div className="flex items-center gap-1.5">
-          <Button variant="outline" size="sm" className="flex-1" onClick={selectAll}>
+          <Button variant="outline" size="sm" onClick={selectAll}>
             <CheckSquare size={13} /> 全选
           </Button>
           <Button
-            variant="danger" size="sm" className="flex-1"
+            variant="outline" size="sm"
+            disabled={selected.size === 0 || batchExporting}
+            onClick={handleBatchExport}
+          >
+            {batchExporting ? <Loader2 size={13} className="animate-spin" /> : <Download size={13} />}
+            导出{selected.size > 0 ? ` (${selected.size})` : ''}
+          </Button>
+          <Button
+            variant="danger" size="sm"
             disabled={selected.size === 0}
             onClick={() => setBatchDeleteOpen(true)}
           >
-            <Trash2 size={13} /> 删除 {selected.size > 0 ? `(${selected.size})` : ''}
+            <Trash2 size={13} /> 删除{selected.size > 0 ? ` (${selected.size})` : ''}
           </Button>
           <button onClick={exitBatchMode} className="p-1.5 rounded-lg text-[color:var(--text-faint)] hover:text-[color:var(--text)] hover:bg-[color:var(--bg-soft)] transition">
             <X size={15} />
@@ -216,7 +243,7 @@ export function SidebarSessions() {
                   batchMode={batchMode}
                   checked={selected.has(s.id)}
                   onToggle={() => toggleSelect(s.id)}
-                  onClick={() => { if (batchMode) { toggleSelect(s.id); } else { setActive(s.id); setView('chat'); } }}
+                  onClick={() => { if (batchMode) { toggleSelect(s.id); } else { setActive(s.id); setView('chat'); onSessionSelect?.(); } }}
                   onDelete={() => setDeleteTarget(s)}
                   onRename={(title) => renameSession(s.id, title)}
                   onPin={() => pinSession(s.id, !s.pinned)}
@@ -232,6 +259,19 @@ export function SidebarSessions() {
           </div>
         )}
       </div>
+
+      {/* 设置入口 - 固定在底部 */}
+      <button
+        onClick={() => setView('settings')}
+        className="flex items-center gap-2.5 w-full px-3 py-2.5 rounded-xl
+          border border-[color:var(--line)] hover:border-[color:var(--accent)]/40
+          bg-[color:var(--bg-soft)] hover:bg-[color:var(--accent-soft)]
+          text-[color:var(--text-soft)] hover:text-[color:var(--accent)]
+          transition-all duration-200 group shrink-0"
+      >
+        <SettingsIcon size={16} className="group-hover:rotate-90 transition-transform duration-300" />
+        <span className="text-sm font-medium">设置</span>
+      </button>
 
       <Modal open={!!deleteTarget} onClose={() => { setDeleteTarget(null); setExtractKB(false); }} title="确认删除" width={400}>
         <p className="text-sm text-[color:var(--text-soft)] mb-3">
@@ -327,6 +367,9 @@ function SessionItem({ session, active, batchMode, checked, onToggle, onClick, o
         ) : (
           <>
             <div className="text-sm truncate">{session.title || '新对话'}</div>
+            {session.summary && (
+              <div className="text-[10px] text-[color:var(--text-soft)] truncate mt-0.5 italic">{session.summary}</div>
+            )}
             <div className="text-[10px] text-[color:var(--text-faint)] truncate flex items-center gap-1.5">
               <span>{session.message_count || 0} 条</span>
               <span className="opacity-50">·</span>
@@ -365,67 +408,14 @@ function SessionItem({ session, active, batchMode, checked, onToggle, onClick, o
 }
 
 function NewSessionButton({ createSession, setView }) {
-  const [menuPos, setMenuPos] = useState(null);
-  const menuRef = useRef(null);
-
-  useEffect(() => {
-    if (!menuPos) return;
-    const handler = (e) => { if (menuRef.current && !menuRef.current.contains(e.target)) setMenuPos(null); };
-    document.addEventListener('mousedown', handler);
-    return () => document.removeEventListener('mousedown', handler);
-  }, [menuPos]);
-
-  const handleCreate = async (mode) => {
-    setMenuPos(null);
-    await createSession({ permission_mode: mode });
-    setView('chat');
-  };
-
-  const handleContextMenu = (e) => {
-    e.preventDefault();
-    setMenuPos({ x: e.clientX, y: e.clientY });
-  };
-
   return (
-    <>
-      <button
-        onClick={async () => { await createSession(); setView('chat'); }}
-        onContextMenu={handleContextMenu}
-        className="flex-1 flex items-center justify-center gap-2 px-3 h-10 rounded-lg text-white transition-all duration-200
-          bg-gradient-to-r from-[color:var(--accent)] to-[#5e8bff]
-          hover:shadow-[0_8px_24px_var(--accent-glow)] hover:-translate-y-px active:translate-y-0 active:scale-[0.99] shadow-soft"
-        title="左键新建（放行模式），右键选择模式"
-      >
-        <Plus size={16} /> 新对话
-      </button>
-      {menuPos && (
-        <div
-          ref={menuRef}
-          className="fixed w-52 rounded-lg border border-[color:var(--line)] bg-[color:var(--bg-elev)] shadow-xl z-[9999] py-1 text-sm"
-          style={{ left: menuPos.x, top: menuPos.y }}
-        >
-          <button
-            onClick={() => handleCreate('trust')}
-            className="w-full flex items-center gap-2.5 px-3 py-2 hover:bg-[color:var(--bg-soft)] text-left transition"
-          >
-            <ShieldOff size={14} className="text-emerald-500 shrink-0" />
-            <div>
-              <div className="font-medium text-[color:var(--text)]">完全放行</div>
-              <div className="text-[10px] text-[color:var(--text-faint)]">Agent 自主执行，无需审批</div>
-            </div>
-          </button>
-          <button
-            onClick={() => handleCreate('managed')}
-            className="w-full flex items-center gap-2.5 px-3 py-2 hover:bg-[color:var(--bg-soft)] text-left transition"
-          >
-            <Shield size={14} className="text-amber-500 shrink-0" />
-            <div>
-              <div className="font-medium text-[color:var(--text)]">权限管控</div>
-              <div className="text-[10px] text-[color:var(--text-faint)]">危险操作需人工确认</div>
-            </div>
-          </button>
-        </div>
-      )}
-    </>
+    <button
+      onClick={async () => { await createSession(); setView('chat'); }}
+      className="flex-1 flex items-center justify-center gap-2 px-3 h-10 rounded-lg text-white transition-all duration-200
+        bg-gradient-to-r from-[color:var(--accent)] to-[#5e8bff]
+        hover:shadow-[0_8px_24px_var(--accent-glow)] hover:-translate-y-px active:translate-y-0 active:scale-[0.99] shadow-soft"
+    >
+      <Plus size={16} /> 新对话
+    </button>
   );
 }

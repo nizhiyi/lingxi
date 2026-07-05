@@ -7,6 +7,8 @@ backend-desktop/smart-agent
 backend-desktop/smart-agent.exe
 backend-desktop/lingxi-agent
 signaling-server/lingxi-signaling
+signaling-server/signaling-linux-amd64
+signaling-server/signaling-server-linux
 dist-electron/
 
 # electron/resources/ holds large generated bundles (ai-engine, node-bin)
@@ -35,6 +37,7 @@ ai-config/auth.json
 *.env
 .env.*
 *.lingxi-build-env
+.cursor/rules/deploy-signaling.mdc
 
 # Database
 *.db
